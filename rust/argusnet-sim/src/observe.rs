@@ -508,6 +508,13 @@ pub struct ObserveStage {
     /// added to its bias walk (F2). Set before every tick from the fault
     /// schedule, a pure function of the tick, so it is not checkpointed.
     bias_offsets: BTreeMap<String, f64>,
+    /// Platforms whose mapping payload returns nothing this tick (F2's
+    /// `mapping_outage`). Set before every tick from the fault schedule, a
+    /// pure function of the tick, so a checkpoint carries none of it.
+    mapping_out: std::collections::BTreeSet<String>,
+    /// Platforms whose navigation camera sees nothing this tick (F2's
+    /// `nav_camera_outage`). Set before every tick, like `mapping_out`.
+    camera_out: std::collections::BTreeSet<String>,
 }
 
 /// Sensors capturing at their own rates rather than every tick.
@@ -629,6 +636,8 @@ impl ObserveStage {
             scans: Vec::new(),
             capture: None,
             bias_offsets: BTreeMap::new(),
+            mapping_out: std::collections::BTreeSet::new(),
+            camera_out: std::collections::BTreeSet::new(),
         }
     }
 
@@ -809,12 +818,29 @@ impl ObserveStage {
                 scanner.scan(&platform.node_id, tick, timestamp_s, position, velocity)
             }),
         };
+        // A mapping payload that is out still flew its capture (its gimbal,
+        // its clock); nothing it would have returned reaches the map.
+        for scan in &mut self.scans {
+            if self.mapping_out.contains(&scan.node_id) {
+                scan.returns.clear();
+                scan.misses = 0;
+                scan.wires.clear();
+                scan.wire_points.clear();
+                scan.wire_lines.clear();
+            }
+        }
         if let Some(camera) = &self.nav_camera {
             let frames = self.compute.map_ordered(&poses, |platform| {
                 let (position, velocity) = pose(platform);
                 camera.frame(&platform.node_id, tick, timestamp_s, position, velocity)
             });
-            self.scans.extend(frames);
+            // A camera that is out sees nothing: no frame, no evidence.
+            let camera_out = &self.camera_out;
+            self.scans.extend(
+                frames
+                    .into_iter()
+                    .filter(|frame| !camera_out.contains(&frame.node_id)),
+            );
         }
     }
 
@@ -846,6 +872,25 @@ impl ObserveStage {
     /// measured from the datum.
     pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
         self.state.terrain = terrain;
+    }
+
+    /// The platforms whose pod gimbal is jammed from now on (F2).
+    pub fn set_gimbal_jammed(&mut self, nodes: std::collections::BTreeSet<String>) {
+        if let Some(pod) = self.pod.as_mut() {
+            pod.set_jammed(nodes);
+        }
+    }
+
+    /// The platforms whose navigation camera sees nothing from now on
+    /// (F2's `nav_camera_outage`), until set again.
+    pub fn set_camera_out(&mut self, nodes: std::collections::BTreeSet<String>) {
+        self.camera_out = nodes;
+    }
+
+    /// The platforms whose mapping payload returns nothing from now on
+    /// (F2's `mapping_outage`), until set again.
+    pub fn set_mapping_out(&mut self, nodes: std::collections::BTreeSet<String>) {
+        self.mapping_out = nodes;
     }
 
     /// Add `offset_rad` to `node_id`'s bearing bias from now on, on top of

@@ -262,6 +262,61 @@ impl SharedVisibility {
 }
 
 impl SharedVisibility {
+    /// Where the segment from `from` to `end` first meets the ground, as a
+    /// fraction of it, given `below` (a fraction at which it is under the
+    /// ground). `terrain_intersection` answers with the middle of the first
+    /// terrain cell whose middle is under the ground, lifted onto the
+    /// ground: a point on the ground but not on the ray, and none at all for
+    /// a ray that falls through the ground inside one cell whose middle it
+    /// crosses above it. A sensor that reports its return as a range along
+    /// the ray then put the ground below itself, by as much as the ray falls
+    /// across half a cell, which a near-vertical ray does steeply, and
+    /// missed it outright under some. So the crossing is found on the ray
+    /// itself: stepped back a cell at a time to a fraction above the
+    /// ground, then bisected to under a tenth of a millimetre.
+    /// How far the point a fraction `t` along from `from` to `end` is above
+    /// the ground under it.
+    fn above_ground(&self, from: [f64; 3], end: [f64; 3], t: f64) -> f64 {
+        let at = |k: usize| from[k] + (end[k] - from[k]) * t;
+        at(2) - argusnet_world::TerrainQuery::height_at(self.terrain.as_ref(), at(0), at(1))
+    }
+
+    fn terrain_crossing(&self, from: [f64; 3], end: [f64; 3], below: f64) -> f64 {
+        let length = (0..3)
+            .map(|i| (end[i] - from[i]).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        if length <= 0.0 {
+            return below;
+        }
+        let above_ground = |t: f64| self.above_ground(from, end, t);
+        // Back along the ray a cell at a time until above the ground: the
+        // first cell found under it may have been entered under it.
+        let step = (self.terrain.base_resolution_m / length).max(1e-9);
+        let mut hi = below;
+        let mut lo = (below - step).max(0.0);
+        while above_ground(lo) <= 0.0 && lo > 0.0 {
+            hi = lo;
+            lo = (lo - step).max(0.0);
+        }
+        if above_ground(lo) <= 0.0 {
+            // The ray starts under the ground: it meets it where it starts.
+            return 0.0;
+        }
+        for _ in 0..48 {
+            let mid = 0.5 * (lo + hi);
+            if above_ground(mid) > 0.0 {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+            if (hi - lo) * length < 1e-4 {
+                break;
+            }
+        }
+        hi
+    }
+
     /// The first surface a ray from `from` toward `to` meets: `terrain`,
     /// `building` or `wall`, and the point. The nearer of the terrain crossing
     /// and the first structure face (wall or roof, in 3D) wins. (`los` answers a different question,
@@ -269,6 +324,8 @@ impl SharedVisibility {
     /// ray through. The ray is cut at the edge of the terrain first, so a ray
     /// that would leave the world still reports what it meets before the
     /// edge. `None` when it meets nothing.
+    ///
+    /// The terrain crossing is on the ray: see [`Self::terrain_crossing`].
     pub fn first_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<(String, [f64; 3])> {
         let bounds = self.terrain.bounds;
         if !bounds.contains_xy(from[0], from[1]) {
@@ -277,12 +334,20 @@ impl SharedVisibility {
         let (_, t_end) = visibility::clip([from[0], from[1]], [to[0], to[1]], bounds)?;
         let t_end = (t_end - 1e-6).max(0.0);
         let end: [f64; 3] = std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t_end);
-        let terrain = visibility::terrain_intersection(&self.terrain, from, end, 0.0).and_then(
-            |(kind, t, point)| match (kind.as_str(), t) {
-                ("terrain", Some(t)) => Some((t, "terrain".to_string(), point)),
-                _ => None,
-            },
-        );
+        // The coarse answer is a hint: where it saw the ray under the
+        // ground. It looks only at the middle of each cell the ray crosses,
+        // so a ray that ends under the ground has crossed it even when no
+        // middle was.
+        let hint = match visibility::terrain_intersection(&self.terrain, from, end, 0.0) {
+            Some((kind, Some(t), _)) if kind == "terrain" => Some(t),
+            _ if self.above_ground(from, end, 1.0) <= 0.0 => Some(1.0),
+            _ => None,
+        };
+        let terrain = hint.map(|below| {
+            let t = self.terrain_crossing(from, end, below);
+            let point: [f64; 3] = std::array::from_fn(|i| from[i] + (end[i] - from[i]) * t);
+            (t, "terrain".to_string(), point)
+        });
         let box_ = argusnet_world::obstacles::Bounds2d::new(
             from[0].min(end[0]),
             from[0].max(end[0]) + 1e-6,
@@ -704,5 +769,68 @@ mod tests {
         let hit = with.first_return([150.0, 100.0, 10.0], [260.0, 100.0, 10.0], &mut || 0.99);
         assert_eq!(hit, None, "{hit:?}");
         assert_eq!(draws, 1);
+    }
+
+    /// A world whose ground rises 1 m for every 10 m east: a 20 m grid of
+    /// heights at 10 m spacing, so heights between posts are interpolated.
+    fn sloped() -> SharedVisibility {
+        let bounds = Bounds2d::new(0.0, 200.0, 0.0, 200.0);
+        let grid: Vec<Vec<f64>> = (0..21)
+            .map(|_| (0..21).map(|i| i as f64).collect())
+            .collect();
+        let terrain = Arc::new(TiledTerrain::from_grid(bounds, &grid, 10.0, 4, 0.0, &[]).unwrap());
+        let obstacles = Arc::new(ObstacleLayer::new(bounds, 50.0, vec![]).unwrap());
+        SharedVisibility::new(
+            terrain,
+            obstacles,
+            None,
+            Arc::new(VisibilityProfile::default()),
+            0.0,
+        )
+    }
+
+    /// A terrain return is where the ray meets the ground: on the ray, and
+    /// on the ground, for steep rays and shallow ones. It used to be the
+    /// middle of the first cell crossed under the ground, lifted onto it:
+    /// on the ground but off the ray, so a sensor that reports a range
+    /// along the ray put the ground below itself.
+    #[test]
+    fn a_terrain_return_is_on_the_ray_and_on_the_ground() {
+        for world in [world(0.0).0, sloped()] {
+            for (from, toward) in [
+                ([52.0, 101.0, 150.0], [60.0, 103.0, -150.0]),
+                ([30.0, 30.0, 120.0], [170.0, 150.0, -40.0]),
+                ([180.0, 20.0, 40.0], [20.0, 180.0, -10.0]),
+            ] {
+                let (kind, point) = world
+                    .first_hit(from, toward)
+                    .unwrap_or_else(|| panic!("no ground from {from:?} toward {toward:?}"));
+                assert_eq!(kind, "terrain");
+                let ground = argusnet_world::TerrainQuery::height_at(
+                    world.terrain.as_ref(),
+                    point[0],
+                    point[1],
+                );
+                assert!(
+                    (point[2] - ground).abs() < 1e-3,
+                    "{} m off the ground",
+                    point[2] - ground
+                );
+                // On the ray: the offset from its start is along it.
+                let ray: [f64; 3] = std::array::from_fn(|k| toward[k] - from[k]);
+                let off: [f64; 3] = std::array::from_fn(|k| point[k] - from[k]);
+                let cross = [
+                    ray[1] * off[2] - ray[2] * off[1],
+                    ray[2] * off[0] - ray[0] * off[2],
+                    ray[0] * off[1] - ray[1] * off[0],
+                ];
+                let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+                assert!(
+                    norm(cross) / norm(ray) < 1e-6,
+                    "{} m off the ray",
+                    norm(cross) / norm(ray)
+                );
+            }
+        }
     }
 }

@@ -1,0 +1,82 @@
+{
+  "format": "argusnet.profile-thresholds",
+  "version": 1,
+  "profile": "field_v1",
+  "frozen": "2026-11-13",
+  "basis": "Declared before the first qualification seeds were run. Seeds 7 and 42 were used while the profile was composed and are reported as tuning seeds, never as qualification evidence.",
+  "per_run": {
+    "mission_complete": {
+      "equals": true,
+      "why": "The mission reaches its complete phase inside the run."
+    },
+    "pois_complete_fraction": {
+      "min": 1.0,
+      "why": "Every inspection point is dwelt at for its required time."
+    },
+    "drones_home": {
+      "equals": true,
+      "why": "Every drone is within the egress radius of its station at the end and has not left it since the mission completed."
+    },
+    "home_radius_m": {
+      "max": 15.0,
+      "why": "The scenario's egress arrival radius."
+    },
+    "world_contacts": {
+      "max": 0,
+      "why": "The physical guard never had to stop or move a platform: nothing was flown into."
+    },
+    "known_fraction": {
+      "min": 0.9,
+      "why": "Share of map cells measured."
+    },
+    "quality_met_fraction": {
+      "min": 0.9,
+      "why": "Share of map cells meeting the profile's declared map requirement; the scan gate itself."
+    },
+    "structure_recall": {
+      "min": 0.9,
+      "why": "Share of true structure cells the map believes occupied."
+    },
+    "structure_precision": {
+      "min": 0.9,
+      "why": "Share of believed structure cells that are true structure."
+    },
+    "ground_rmse_m": {
+      "max": 1.0,
+      "why": "Measured ground against the true ground, over known cells."
+    },
+    "wire_clearance_min_m": {
+      "min": 10.0,
+      "why": "Closest any drone came to a true conductor; the line's own declared clearance. Not applicable in a world without power lines."
+    },
+    "drone_separation_min_m": {
+      "min": 16.0,
+      "why": "Closest any two drones came to each other; the separation deconfliction is configured to keep. Not applicable to a single drone."
+    },
+    "energy_reserve_margin_min_wh": {
+      "min": 0.0,
+      "why": "No drone's remaining energy fell below its reserve at any tick."
+    },
+    "max_step_m": {
+      "max": 12.0,
+      "why": "No platform moves further in one 0.25 s tick than the redirect speed and climb rate allow: nothing is put somewhere, everything is flown there."
+    },
+    "repeat_identical": {
+      "equals": true,
+      "why": "The same seed and config give the same replay bytes."
+    }
+  },
+  "campaign": {
+    "min_pass_fraction": 1.0,
+    "min_qualification_seeds": 10,
+    "min_heldout_seeds": 5,
+    "why": "Every qualification and held-out seed passes every per-run gate. A gate with no value in the replay fails: an unknown requirement cannot pass."
+  },
+  "amendments": [
+    {
+      "date": "2026-11-13",
+      "change": "Added drone_separation_min_m.",
+      "why": "The first campaign (15 counted seeds) failed max_step_m on 4: deconfliction applied its separation offset at once. Flying the offset in instead trades jumps for closer passes, which no gate measured. The gate is stricter than what was frozen; no existing bound was changed. The seeds of that campaign are tuning seeds from here on, and each later campaign is run on fresh ones."
+    }
+  ]
+}

@@ -32,9 +32,27 @@ Choose `--duration-s` to change the observation window and `--binary` to select
 an explicitly built release executable. Timings from a debug executable must
 not be used as production performance claims.
 
-The remaining acceptance work is to declare and qualify coverage, reconstruction
-error, inspection evidence, energy reserve and failure-response thresholds over
-held-out seeds. Some scenario setup still consults truth, most imported building
-heights are defaults, and localization integrity, landing and inspection evidence
-sufficiency are not established. Independent scheduling, hardware qualification
-and Plan remain separate work.
+## With thresholds: `--profile field_v1`
+
+```bash
+cargo build --release --locked -p argusnet-cli
+python scripts/real_site_inspection.py --output runs/real-site-field \
+  --profile field_v1 --binary target/release/argusnet-rs --seeds 7 42
+```
+
+With a profile, every run flies it (600 s by default, long enough for the
+mission to complete) and is scored against the profile's frozen thresholds
+(`docs/contracts/field_v1.thresholds.json`): mission complete, every POI done,
+drones home, no world contact, map coverage and accuracy, wire clearance,
+energy reserve and reproducibility. `results.json` carries each gate's value
+and verdict, and the exit status is zero only when every seed passes every
+gate. That is one site and the seeds given;
+`scripts/qualify_field_profile.py` runs the predetermined and held-out seeds
+and is the qualification ([FIELD_PROFILE.md](migration/FIELD_PROFILE.md)).
+
+## What remains
+
+Localization integrity, landing and inspection evidence sufficiency are not
+established, and most imported building heights are defaults. The rig, LiDAR
+and camera models are assumed, not calibrated. Independent scheduling beyond
+the lane rates, hardware qualification and Plan remain separate work.

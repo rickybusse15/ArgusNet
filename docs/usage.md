@@ -319,6 +319,30 @@ itself, and the run that built it. Opening it plays that run on the timeline.
 In the viewer, **Save map as scene** in the map readout saves the map at the
 cursor to `./argusnet-maps/`.
 
+### The composed field mission in one flag
+
+`--profile field_v1` is the no-prior capabilities above and below as one
+qualified set: the provisional rig with modelled LiDAR returns, measured and
+tracked power lines with poles and wire-aware flight, mission flights over
+the believed surface, `flown_v1` energy, `contingency_v1` planning, and a
+declared map requirement the scan must meet. The flags it sets are refused
+with it; faults, delivery and rates still apply.
+
+```bash
+argusnet-rs sim --config runs/site/scenario.json --profile field_v1 --replay runs/field.json
+cargo run -p argusnet-viewer -- --run runs/site/scenario.json --profile field_v1
+```
+
+A config run this way is built for platforms that do not know the world
+(`blind_setup`). See [FIELD_PROFILE.md](migration/FIELD_PROFILE.md) for what
+it composes, what it was qualified on and what it does not claim. To score a
+site against the profile's frozen thresholds:
+
+```bash
+python scripts/real_site_inspection.py --output runs/real-site --profile field_v1
+python scripts/qualify_field_profile.py --output runs/field-v1
+```
+
 ### Mapping run with split-view 3-D reconstruction
 
 Run a scan/map/inspect mission, package it, and open the viewer with the real

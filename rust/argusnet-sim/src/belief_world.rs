@@ -152,6 +152,95 @@ pub struct ExplorationConfig {
     /// `wire_tracker`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncertain_prior: Option<UncertainPrior>,
+    /// Fly mission flights (to a POI, home, back to a path) over what the
+    /// map believes is there: measured ground, believed structures, the
+    /// navigation camera's obstacles, and the stand-in for unseen ground.
+    /// Absent (the default) flies them as planned, in straight lines the
+    /// physical guard stops.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_flights: Option<MissionFlightConfig>,
+}
+
+/// How mission flights keep above the believed surface.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissionFlightConfig {
+    /// Height kept over the believed surface, metres.
+    pub clearance_m: f64,
+    /// Seconds of flight ahead a platform looks.
+    pub lookahead_s: f64,
+    /// The least distance ahead looked at, metres.
+    pub min_reach_m: f64,
+    /// How fast height changes for the surface, m/s.
+    pub climb_mps: f64,
+    /// Within this distance of its target a flight may come down to it:
+    /// only believed structures on the way in are kept above, not the
+    /// ground and not the target's own cell.
+    pub approach_radius_m: f64,
+    /// Half the width of the strip looked at ahead, metres.
+    pub corridor_m: f64,
+    /// How fast a deconfliction offset is flown in and out sideways, m/s
+    /// (up and down at `climb_mps`): two drones are moved apart, not put
+    /// apart.
+    #[serde(default = "default_separation_mps")]
+    pub separation_mps: f64,
+    /// How far ahead deconfliction looks, seconds, in place of the 1 s it
+    /// looks when it can put a drone aside at once: an offset flown in at
+    /// `separation_mps` needs the time to open.
+    #[serde(default = "default_separation_look_ahead_s")]
+    pub separation_look_ahead_s: f64,
+}
+
+fn default_separation_mps() -> f64 {
+    14.0
+}
+
+fn default_separation_look_ahead_s() -> f64 {
+    4.0
+}
+
+impl Default for MissionFlightConfig {
+    fn default() -> Self {
+        Self {
+            clearance_m: 8.0,
+            lookahead_s: 6.0,
+            min_reach_m: 40.0,
+            climb_mps: 15.0,
+            approach_radius_m: 25.0,
+            corridor_m: 5.0,
+            separation_mps: default_separation_mps(),
+            separation_look_ahead_s: default_separation_look_ahead_s(),
+        }
+    }
+}
+
+impl MissionFlightConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value) in [
+            ("clearance_m", self.clearance_m),
+            ("lookahead_s", self.lookahead_s),
+            ("min_reach_m", self.min_reach_m),
+            ("climb_mps", self.climb_mps),
+            ("separation_mps", self.separation_mps),
+            ("separation_look_ahead_s", self.separation_look_ahead_s),
+        ] {
+            if !(value.is_finite() && value > 0.0) {
+                return Err(format!(
+                    "mission flights {name} must be positive, got {value}"
+                ));
+            }
+        }
+        for (name, value) in [
+            ("approach_radius_m", self.approach_radius_m),
+            ("corridor_m", self.corridor_m),
+        ] {
+            if !(value.is_finite() && value >= 0.0) {
+                return Err(format!(
+                    "mission flights {name} must not be negative, got {value}"
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A wire map to start from, and what it may be wrong by (W5).
@@ -277,6 +366,7 @@ impl Default for ExplorationConfig {
             poles: None,
             wire_planning: None,
             uncertain_prior: None,
+            mission_flights: None,
         }
     }
 }
@@ -327,6 +417,9 @@ impl ExplorationConfig {
                 return Err("wire planning needs pole detection".into());
             }
             planning.validate()?;
+        }
+        if let Some(flights) = &self.mission_flights {
+            flights.validate()?;
         }
         if let Some(prior) = &self.uncertain_prior {
             if self.wire_tracker.is_none() {
@@ -2082,6 +2175,68 @@ impl BeliefSnapshot {
         }
     }
 
+    /// The highest believed surface in the strip `half_width_m` either side
+    /// of the segment from `from_m` to `to_m`: believed structures and the
+    /// navigation camera's obstacles, and, with `ground`, the ground (the
+    /// stand-in where unseen). The cell at `skip_m`, a flight's target, is
+    /// left out. `None` when the strip holds nothing of the kind asked for.
+    pub fn surface_top_along(
+        &self,
+        from_m: [f64; 2],
+        to_m: [f64; 2],
+        half_width_m: f64,
+        ground: bool,
+        skip_m: Option<[f64; 2]>,
+    ) -> Option<f64> {
+        let skip = skip_m.map(|at| self.ij(at[0], at[1]));
+        let (dx, dy) = (to_m[0] - from_m[0], to_m[1] - from_m[1]);
+        let length = dx.hypot(dy);
+        let (ux, uy) = if length > 1e-9 {
+            (dx / length, dy / length)
+        } else {
+            (1.0, 0.0)
+        };
+        // Half a cell between samples, along and across: no cell the strip
+        // covers by more than a corner is missed.
+        let stride = 0.5 * self.resolution_m;
+        let along = (length / stride).ceil().max(1.0) as usize;
+        let across = (half_width_m / stride).ceil() as i64;
+        let mut top: Option<f64> = None;
+        let mut last = usize::MAX;
+        for k in 0..=along {
+            let s = length * k as f64 / along as f64;
+            for w in -across..=across {
+                let offset = if across == 0 {
+                    0.0
+                } else {
+                    half_width_m * w as f64 / across as f64
+                };
+                let x = from_m[0] + ux * s - uy * offset;
+                let y = from_m[1] + uy * s + ux * offset;
+                let (i, j) = self.ij(x, y);
+                let cell = j * self.nx + i;
+                if cell == last || skip == Some((i, j)) {
+                    continue;
+                }
+                last = cell;
+                let mut here = f64::NEG_INFINITY;
+                if ground {
+                    here = here.max(self.cell_ground(i, j));
+                }
+                if self.structure_top[cell].is_finite() {
+                    here = here.max(self.structure_top[cell]);
+                }
+                if let Some(safety) = self.safety_top.get(cell).filter(|v| v.is_finite()) {
+                    here = here.max(*safety);
+                }
+                if here.is_finite() {
+                    top = Some(top.map_or(here, |t: f64| t.max(here)));
+                }
+            }
+        }
+        top
+    }
+
     pub fn resolution_m(&self) -> f64 {
         self.resolution_m
     }
@@ -2845,6 +3000,16 @@ impl PhysicalGuard {
                 kind: kind.to_string(),
                 correction_m,
             });
+    }
+
+    /// Forget `node_id`'s contacts at `timestamp_s`: a position worked out
+    /// for it this tick that it then did not fly (a mission flight flew it
+    /// instead) touched nothing.
+    pub fn forget(&self, node_id: &str, timestamp_s: f64) {
+        self.contacts
+            .lock()
+            .expect("contact log")
+            .retain(|contact| !(contact.node_id == node_id && contact.timestamp_s == timestamp_s));
     }
 
     /// The contacts since the last call.

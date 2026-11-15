@@ -204,6 +204,15 @@ pub struct ScenarioOptions {
     /// profile. Off by default; written only when on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub power_line_inspection: bool,
+    /// Build the scenario for platforms that do not know the world in
+    /// advance: search lanes are left as laid out, neither routed round the
+    /// true obstacles nor pushed out of them (the platforms' own map
+    /// deflects them), and each POI declares its hover height over the
+    /// ground (`hover_agl_m`), which a run without a prior map resolves
+    /// against what it has measured. Stations stay where they can stand.
+    /// Off by default; written only when on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub blind_setup: bool,
     /// R2: scatter trees (`tree-v1`) over the map's forest and scrub. Off
     /// by default, so every existing scenario's world is unchanged; written
     /// only when on.

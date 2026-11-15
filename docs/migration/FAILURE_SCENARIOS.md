@@ -25,6 +25,9 @@ An `argusnet.fault-manifest` (version 1) lists faults by simulated time:
 | `link_delay` | The node's evidence takes `delay_s` to arrive over the interval instead of its profile delay. | B4 delivery (`--fusion-lag-s`); delay plus jitter within the lag |
 | `source_restart` | The node's transport restarts: a new source epoch, so its in-flight evidence is dropped as `delivery_stale_epoch`. | B4 delivery |
 | `calibration_drift` | The node's bearing calibration drifts at `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to, since nothing recalibrates it. The offset adds to the sensor's bias walk and survives an outage's restart. (Second slice, 2026-10-23.) | — |
+| `mapping_outage` | The platform's mapping payload (the rig's pod LiDAR, or the range scanner) returns nothing over `[start_s, end_s)`: no ground, structure or wire evidence from it reaches the map. Its navigation camera goes on seeing. | A run that maps for itself (`--world-knowledge none`, or a profile) |
+| `nav_camera_outage` | The platform's forward navigation camera, its primary obstacle sensor, sees nothing over `[start_s, end_s)`. Declared fallback: it brakes at the camera's declared deceleration to a hold in plan, keeps its height control (which reads the believed map), and goes on when the camera is back. Mission flights are delayed while held, never jumped. | A navigation camera and governed flights (`mission_flights`, as in `field_v1`) |
+| `gimbal_jam` | The platform's pod gimbal holds where it is over `[start_s, end_s)`, whatever is commanded. Declared fallback, fixed pointing: its encoders still measure the attitude, so a capture counts while the boresight is within 45° of nadir and is refused (counted as unsettled) past it. | A declared rig |
 
 The manifest is validated against the run before any tick. It is refused
 (`argusnet-rs` exit 3, with the reason) when:
@@ -125,3 +128,84 @@ about the same axis. Offsets are a pure function of the tick, re-applied before
 every tick and on restore. A run resumed mid-drift or after it matches the
 straight run frame for frame. A zero or non-finite rate is refused before the
 run. Runs without faults are unchanged (14/14 canonical replays).
+
+## Third slice: a mapping outage against the composed mission (2026-11-13)
+
+The first two slices fault bearing sensors and their links, which a scan
+mission does not fly on. `mapping_outage` faults what it does fly on. Case F
+(`a_mapping_outage_slows_the_mission_and_nothing_else`,
+`tests/field_profile.rs`) takes drone-east's mapping LiDAR out for the first
+80 s of the composed mission ([FIELD_PROFILE.md](FIELD_PROFILE.md)). Declared
+before the run, and held:
+
+- detection: every frame of the interval names the fault, and the map holds
+  under 80% of the unfaulted run's at the interval's end;
+- containment: no world contact;
+- terminal state: the mission completes with every POI done and every drone
+  at its station, and the scan ends only once the map the run made meets the
+  gate. As first declared, the mission also completed later than the
+  unfaulted run; that held only by chance. Once terrain returns were put on
+  the ray (FIELD_PROFILE.md), the faulted run's scan and mission both ended
+  earlier (140 s and 207 s, against 192 s and 258 s): with the outage over
+  by 80 s, which drone takes which POI decides the order. The expectation
+  was restated rather than kept;
+- a run checkpointed inside the outage finishes as the uninterrupted one.
+
+The outage is a pure function of the tick, like the others. The payload still
+flies its capture (gimbal, clock); only what it would have returned is
+withheld. A manifest with a `mapping_outage` is refused in a run with a prior
+map, which has no mapping payload.
+
+## Fourth slice: losing the navigation camera (2026-11-15)
+
+The composed mission avoids what it has not mapped with the forward
+navigation camera. `nav_camera_outage` takes it away. Speed is capped
+fleet-wide from the camera's envelope when the run is assembled, so the
+fallback acts where every platform's motion already passes, stage 2's
+governor: a platform whose camera is out brakes at the camera's declared
+deceleration (3 m/s²) to a hold in plan. Explorers go on from where the
+aircraft is once it falls behind them, a held mission flight's plan is
+delayed a tick at a time, and a rejoin resumes from where it holds, so
+nothing jumps when the camera is back.
+
+Case G (`a_navigation_camera_outage_brakes_to_a_hold_and_the_mission_goes_on`,
+`tests/field_profile.rs`) takes drone-east's camera out over [20 s, 60 s)
+while it explores. Declared before the run, and held:
+
+- detection: every frame of the interval names the fault, and no other;
+- containment: its distance flown in plan each tick never grows during the
+  outage and never falls by more than the declared braking allows; it is at
+  rest within the time to brake from its cruise speed and stays at rest to
+  the end of the interval; no world contact;
+- terminal state: the mission completes, every POI done, every drone home;
+- a run checkpointed during the hold finishes as the uninterrupted one.
+
+Refused before the run without a navigation camera, or without governed
+flights to fall back with.
+
+## Fifth slice: a jammed gimbal (2026-11-15)
+
+`gimbal_jam` holds the pod where it is, whatever is commanded. The sensing
+guide asks for a declared fixed-pointing fallback with the gap recorded.
+The pod's encoders still measure where it is, so its captures are
+georeferenced as always; they count as survey evidence while the boresight
+looks within 45° of nadir, and the map refuses them past that, counted as
+unsettled. On target or not stays the attitude against the command, so a
+pod jammed where it was already pointing does not settle again when freed.
+
+Case H (`a_jammed_gimbal_maps_by_fixed_pointing_or_not_at_all`,
+`tests/field_profile.rs`), declared before the run, and held:
+
+- jammed at nadir while cruising (where the profile points it anyway),
+  every frame's map is the unfaulted run's: the fallback loses nothing it
+  should not;
+- jammed from launch, still stowed and looking along the horizon, every
+  capture is refused while it lasts (at least 30 more refusals by 60 s),
+  the map falls behind, nothing is flown into, the mission completes with
+  every POI done and every drone home, and a run resumed inside the jam
+  matches;
+- refused before the run without a declared rig.
+
+Still not covered: a degraded (rather than lost) camera envelope per
+platform, a jam during a sweep (a policy `field_v1` does not use), and
+return home as a fault response.

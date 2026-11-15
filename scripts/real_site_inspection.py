@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Run the checked-in real site through import, simulation, client report and Review scene.
 
-Produces a reproducibility record, not a flight or mission-quality certification.
+Without ``--profile`` it produces a reproducibility record: a zero exit means
+the runs were reproducible and the package verifies, not that the mission met
+any target. With ``--profile field_v1`` every run flies that profile and is
+scored against its frozen thresholds (``docs/contracts/field_v1.thresholds.json``),
+and the exit is zero only when every seed passes every gate. That is still one
+site and a few seeds; ``scripts/qualify_field_profile.py`` is the campaign.
 Run with the project's Python after building argusnet-cli.
 """
 
@@ -19,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from argusnet.core.io_limits import read_text_capped, sha256_file  # noqa: E402
 from argusnet.evaluation.assurance import build_client_package  # noqa: E402
+from argusnet.evaluation.field_qualification import load_thresholds, score_replay  # noqa: E402
 from argusnet.evaluation.replay import validate_replay_with_schema  # noqa: E402
 from argusnet.world.world_import import import_world  # noqa: E402
 
@@ -32,8 +38,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True, help="a new output directory")
     parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/argusnet-rs")
     parser.add_argument("--seeds", type=int, nargs="+", default=[7, 42])
-    parser.add_argument("--duration-s", type=float, default=120.0)
+    parser.add_argument("--duration-s", type=float, default=None)
+    parser.add_argument(
+        "--profile",
+        choices=["field_v1"],
+        help="fly this run profile and score every run against its thresholds",
+    )
+    parser.add_argument(
+        "--thresholds", type=Path, default=ROOT / "docs/contracts/field_v1.thresholds.json"
+    )
     args = parser.parse_args(argv)
+    if args.duration_s is None:
+        # A profile's mission needs its whole length to complete.
+        args.duration_s = 600.0 if args.profile else 120.0
+    thresholds = load_thresholds(args.thresholds) if args.profile else None
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     if output.exists():
@@ -66,32 +84,44 @@ def main(argv: list[str] | None = None) -> int:
         "binary_sha256": sha256_file(binary),
         "workflow_sha256": sha256_file(Path(__file__)),
         "duration_s": args.duration_s,
-        "checks": ["replay schema", "same-seed replay equality", "package artifact hashes"],
+        "checks": ["replay schema", "same-seed replay equality", "package artifact hashes"]
+        + (["profile thresholds"] if args.profile else []),
+        "profile": args.profile,
+        "thresholds_sha256": sha256_file(args.thresholds) if args.profile else None,
         "runs": [],
-        "limits": [
-            "Reproducibility checks do not certify mission completion or map quality.",
-            "Scenario setup still uses truth for some routes and inspection points.",
-            "Landing, localization integrity and evidence sufficiency remain unavailable.",
-        ],
+        "limits": (
+            [
+                "Thresholds are scored on this site and these seeds only.",
+                "The rig, LiDAR and camera models are assumed, not calibrated against hardware.",
+                "Station siting and the POIs' horizontal places come from the scenario generator.",
+            ]
+            if args.profile
+            else [
+                "Reproducibility checks do not certify mission completion or map quality.",
+                "Scenario setup still uses truth for some routes and inspection points.",
+            ]
+        )
+        + ["Landing, localization integrity and evidence sufficiency remain unavailable."],
     }
+    missed: list[str] = []
     for seed in args.seeds:
         directory = output / f"seed-{seed}"
         directory.mkdir()
         config["seed"] = seed
         scenario = directory / "scenario.json"
         scenario.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        common = (
-            "sim",
-            "--quiet",
-            "--config",
-            str(scenario),
-            "--world-knowledge",
-            "none",
-            "--planning-policy",
-            "contingency_v1",
-            "--energy-profile",
-            "flown_v1",
-        )
+        common: tuple[str, ...] = ("sim", "--quiet", "--config", str(scenario))
+        if args.profile:
+            common += ("--profile", args.profile)
+        else:
+            common += (
+                "--world-knowledge",
+                "none",
+                "--planning-policy",
+                "contingency_v1",
+                "--energy-profile",
+                "flown_v1",
+            )
         replay = directory / "replay.json"
         repeat = directory / "repeat.json"
         run(binary, *common, "--replay", str(replay))
@@ -137,12 +167,24 @@ def main(argv: list[str] | None = None) -> int:
                 "review_scene": str((directory / "review.smartscene").relative_to(output)),
             }
         )
+        if thresholds is not None:
+            scored = score_replay(document, thresholds, repeat_identical=True)
+            result["runs"][-1]["thresholds"] = scored
+            missed += [f"seed {seed}: {name}" for name in scored["failed"]]
         (output / "results.json").write_text(
             json.dumps(result, indent=2, allow_nan=False) + "\n",
             encoding="utf-8",
         )
-    print(json.dumps({"results": str(output / "results.json"), "runs": len(result["runs"])}))
-    return 0
+    print(
+        json.dumps(
+            {
+                "results": str(output / "results.json"),
+                "runs": len(result["runs"]),
+                **({"thresholds_missed": missed} if args.profile else {}),
+            }
+        )
+    )
+    return 1 if missed else 0
 
 
 if __name__ == "__main__":
