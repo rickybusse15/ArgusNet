@@ -27,6 +27,7 @@ An `argusnet.fault-manifest` (version 1) lists faults by simulated time:
 | `calibration_drift` | The node's bearing calibration drifts at `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to, since nothing recalibrates it. The offset adds to the sensor's bias walk and survives an outage's restart. (Second slice, 2026-10-23.) | — |
 | `mapping_outage` | The platform's mapping payload (the rig's pod LiDAR, or the range scanner) returns nothing over `[start_s, end_s)`: no ground, structure or wire evidence from it reaches the map. Its navigation camera goes on seeing. | A run that maps for itself (`--world-knowledge none`, or a profile) |
 | `nav_camera_outage` | The platform's forward navigation camera, its primary obstacle sensor, sees nothing over `[start_s, end_s)`. Declared fallback: it brakes at the camera's declared deceleration to a hold in plan, keeps its height control (which reads the believed map), and goes on when the camera is back. Mission flights are delayed while held, never jumped. | A navigation camera and governed flights (`mission_flights`, as in `field_v1`) |
+| `gimbal_jam` | The platform's pod gimbal holds where it is over `[start_s, end_s)`, whatever is commanded. Declared fallback, fixed pointing: its encoders still measure the attitude, so a capture counts while the boresight is within 45° of nadir and is refused (counted as unsettled) past it. | A declared rig |
 
 The manifest is validated against the run before any tick. It is refused
 (`argusnet-rs` exit 3, with the reason) when:
@@ -182,5 +183,29 @@ while it explores. Declared before the run, and held:
 Refused before the run without a navigation camera, or without governed
 flights to fall back with.
 
-Still not covered: a gimbal fault, a degraded (rather than lost) camera
-envelope per platform, and return-home as a fault response.
+## Fifth slice: a jammed gimbal (2026-11-15)
+
+`gimbal_jam` holds the pod where it is, whatever is commanded. The sensing
+guide asks for a declared fixed-pointing fallback with the gap recorded.
+The pod's encoders still measure where it is, so its captures are
+georeferenced as always; they count as survey evidence while the boresight
+looks within 45° of nadir, and the map refuses them past that, counted as
+unsettled. On target or not stays the attitude against the command, so a
+pod jammed where it was already pointing does not settle again when freed.
+
+Case H (`a_jammed_gimbal_maps_by_fixed_pointing_or_not_at_all`,
+`tests/field_profile.rs`), declared before the run, and held:
+
+- jammed at nadir while cruising (where the profile points it anyway),
+  every frame's map is the unfaulted run's: the fallback loses nothing it
+  should not;
+- jammed from launch, still stowed and looking along the horizon, every
+  capture is refused while it lasts (at least 30 more refusals by 60 s),
+  the map falls behind, nothing is flown into, the mission completes with
+  every POI done and every drone home, and a run resumed inside the jam
+  matches;
+- refused before the run without a declared rig.
+
+Still not covered: a degraded (rather than lost) camera envelope per
+platform, a jam during a sweep (a policy `field_v1` does not use), and
+return home as a fault response.

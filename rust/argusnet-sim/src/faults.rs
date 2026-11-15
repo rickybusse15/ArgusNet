@@ -25,6 +25,12 @@
 //!   a hold in plan, keeping its height control, and goes on once the
 //!   camera is back. Needs a navigation camera and governed flights
 //!   (`mission_flights`).
+//! - **`gimbal_jam`**: a platform's pod gimbal holds where it is over
+//!   `[start_s, end_s)`, whatever is commanded. The declared fallback is
+//!   fixed pointing: its encoders still measure the attitude, so a capture
+//!   counts while the boresight is within
+//!   [`crate::pod::JAMMED_MAX_OFF_NADIR_DEG`] of nadir, and is refused (a
+//!   gap, counted as unsettled) past it. Needs a declared rig.
 //!
 //! Outages, delays and drift offsets are a pure function of the tick and are re-applied
 //! idempotently before every tick, so a checkpoint needs no extra state to
@@ -74,6 +80,11 @@ pub enum Fault {
         start_s: f64,
         end_s: f64,
     },
+    GimbalJam {
+        node_id: String,
+        start_s: f64,
+        end_s: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +129,8 @@ pub struct FaultSchedule {
     mapping_outages: Vec<(String, u64, u64)>,
     /// `(node, start tick, end tick)`, end exclusive.
     camera_outages: Vec<(String, u64, u64)>,
+    /// `(node, start tick, end tick)`, end exclusive.
+    gimbal_jams: Vec<(String, u64, u64)>,
 }
 
 impl FaultSchedule {
@@ -162,6 +175,7 @@ impl FaultSchedule {
             specs: BTreeMap::new(),
             mapping_outages: Vec::new(),
             camera_outages: Vec::new(),
+            gimbal_jams: Vec::new(),
         };
         for fault in &manifest.faults {
             match fault {
@@ -242,6 +256,15 @@ impl FaultSchedule {
                     let (start, end) = interval(node_id, *start_s, *end_s)?;
                     schedule.camera_outages.push((node_id.clone(), start, end));
                 }
+                Fault::GimbalJam {
+                    node_id,
+                    start_s,
+                    end_s,
+                } => {
+                    known(node_id)?;
+                    let (start, end) = interval(node_id, *start_s, *end_s)?;
+                    schedule.gimbal_jams.push((node_id.clone(), start, end));
+                }
             }
         }
         Ok(schedule)
@@ -277,6 +300,7 @@ impl FaultSchedule {
                 Fault::SensorOutage { start_s, end_s, .. }
                 | Fault::MappingOutage { start_s, end_s, .. }
                 | Fault::NavCameraOutage { start_s, end_s, .. }
+                | Fault::GimbalJam { start_s, end_s, .. }
                 | Fault::LinkDelay { start_s, end_s, .. }
                 | Fault::CalibrationDrift { start_s, end_s, .. } => within(*start_s, *end_s),
                 Fault::SourceRestart { at_s, .. } => tick_of(*at_s, dt_s) == tick,
@@ -335,6 +359,20 @@ impl FaultSchedule {
     /// The nodes whose navigation camera sees nothing at `tick`.
     pub fn camera_out(&self, tick: u64) -> std::collections::BTreeSet<String> {
         self.camera_outages
+            .iter()
+            .filter(|(_, start, end)| (*start..*end).contains(&tick))
+            .map(|(node, _, _)| node.clone())
+            .collect()
+    }
+
+    /// Whether the manifest jams any gimbal.
+    pub fn has_gimbal_jams(&self) -> bool {
+        !self.gimbal_jams.is_empty()
+    }
+
+    /// The nodes whose gimbal is jammed at `tick`.
+    pub fn gimbal_jammed(&self, tick: u64) -> std::collections::BTreeSet<String> {
+        self.gimbal_jams
             .iter()
             .filter(|(_, start, end)| (*start..*end).contains(&tick))
             .map(|(node, _, _)| node.clone())

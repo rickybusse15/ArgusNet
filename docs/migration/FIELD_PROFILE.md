@@ -279,6 +279,9 @@ it ends where it is allowed to), and the closest approach to a conductor
 - `nav_camera_outage`: one drone's forward camera out for 40 s while it
   explores. It brakes at the declared 3 m/s² to a hold in plan and holds
   to the end of the outage; the mission completes with no contact.
+- `gimbal_jam`: jammed at nadir, the map is the unfaulted run's frame by
+  frame; jammed stowed from launch, every capture is refused while it lasts
+  and the mission still completes with no contact.
 
 Bounded causal jobs and restore with pending jobs (P4.10d–e) are not part of
 this.
@@ -295,7 +298,7 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - The map requirement's vertical sigma is still judged from the returns'
   own spread and a declared bias; nothing yet compares predicted against
   achieved quality on a run (the sensing guide's SR5d).
-- No gimbal fault, no pointing arbiter, no view planning, and no return
-  home as a fault response (a lost navigation camera is answered with a
-  braked hold).
+- No pointing arbiter, no view planning, and no return home as a fault
+  response (a lost navigation camera is answered with a braked hold, a
+  jammed gimbal with fixed pointing).
 - No landing: home is a hover at the station.

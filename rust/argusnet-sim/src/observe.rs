@@ -874,6 +874,13 @@ impl ObserveStage {
         self.state.terrain = terrain;
     }
 
+    /// The platforms whose pod gimbal is jammed from now on (F2).
+    pub fn set_gimbal_jammed(&mut self, nodes: std::collections::BTreeSet<String>) {
+        if let Some(pod) = self.pod.as_mut() {
+            pod.set_jammed(nodes);
+        }
+    }
+
     /// The platforms whose navigation camera sees nothing from now on
     /// (F2's `nav_camera_outage`), until set again.
     pub fn set_camera_out(&mut self, nodes: std::collections::BTreeSet<String>) {

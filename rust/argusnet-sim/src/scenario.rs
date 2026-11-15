@@ -815,6 +815,8 @@ pub struct AssembledRun {
     /// Whether it takes a navigation camera out, which needs a camera and
     /// governed flights to fall back with.
     faults_need_camera: bool,
+    /// Whether it jams a gimbal, which needs a declared rig's pod.
+    faults_need_pod: bool,
     /// The hover height each POI declares (`blind_setup`), by id.
     poi_hover_agl_m: BTreeMap<String, f64>,
     /// Scheduled sensor and link faults (F2), applied before every tick.
@@ -1428,6 +1430,7 @@ pub fn assemble_with(
     Ok(AssembledRun {
         faults_need_mapping: false,
         faults_need_camera: false,
+        faults_need_pod: false,
         poi_hover_agl_m: bundle
             .mission
             .iter()
@@ -2273,6 +2276,9 @@ impl AssembledRun {
                     .into(),
             );
         }
+        if self.faults_need_pod && self.observe().pod().is_none() {
+            return Err("gimbal_jam needs a declared rig, whose pod has a gimbal".into());
+        }
         if self.faults_need_camera {
             let camera = self.observe().nav_camera().is_some();
             let governed = self
@@ -2340,6 +2346,7 @@ impl AssembledRun {
         )?;
         self.faults_need_mapping = schedule.has_mapping_outages();
         self.faults_need_camera = schedule.has_camera_outages();
+        self.faults_need_pod = schedule.has_gimbal_jams();
         self.replay.extend_meta([(
             "fault_manifest".to_string(),
             serde_json::to_value(schedule.manifest()).expect("manifest serialises"),
@@ -2365,6 +2372,7 @@ impl AssembledRun {
             .collect();
         let mapping_out = schedule.mapping_out(tick);
         let camera_out = schedule.camera_out(tick);
+        let gimbal_jammed = schedule.gimbal_jammed(tick);
         if let Some(overrides) = self
             .sim
             .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
@@ -2377,6 +2385,7 @@ impl AssembledRun {
             .expect("assembly installs an ObserveStage");
         observe.set_mapping_out(mapping_out);
         observe.set_camera_out(camera_out);
+        observe.set_gimbal_jammed(gimbal_jammed);
         for (node, offset) in offsets {
             observe.set_bias_offset(&node, offset);
         }

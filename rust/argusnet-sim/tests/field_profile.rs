@@ -914,3 +914,117 @@ fn a_camera_outage_is_refused_without_a_camera_or_governed_flights() {
         assert!(refused.contains("nav_camera_outage"), "{why}: {refused}");
     }
 }
+
+fn gimbal_jam(node_id: &str, start_s: f64, end_s: f64) -> FaultManifest {
+    FaultManifest {
+        format: MANIFEST_FORMAT.into(),
+        version: MANIFEST_VERSION,
+        faults: vec![Fault::GimbalJam {
+            node_id: node_id.into(),
+            start_s,
+            end_s,
+        }],
+    }
+}
+
+/// The belief figures that say what the map holds.
+fn mapped(frame: &serde_json::Value) -> serde_json::Value {
+    let belief = &frame["mapping_state"]["belief"];
+    serde_json::json!([
+        belief["known_cells"],
+        belief["ground_rmse_m"],
+        belief["unsettled_scans"]
+    ])
+}
+
+/// F2 `gimbal_jam`, its fixed-pointing fallback, declared before the run:
+///
+/// - A gimbal that jams where it already points (the profile's nadir,
+///   held in the body frame while cruising) loses nothing: every frame's
+///   map is the unfaulted run's.
+/// - One jammed from launch, still stowed and looking along the horizon,
+///   has every capture refused for the whole jam (each counted as
+///   unsettled), so the map falls behind while it lasts; nothing is flown
+///   into; the mission completes with every POI done and every drone home;
+///   and a run resumed inside the jam matches.
+#[test]
+fn a_jammed_gimbal_maps_by_fixed_pointing_or_not_at_all() {
+    let bundle = bundle();
+    let with = |faults| RunOptions {
+        faults: Some(faults),
+        ..whole_mission()
+    };
+    let (_, clean) = replay(run_with(&bundle, &whole_mission()));
+
+    // Jammed at nadir while cruising: the same map, frame by frame.
+    let (_, nadir) = replay(run_with(
+        &bundle,
+        &with(gimbal_jam("drone-east", 30.0, 70.0)),
+    ));
+    for (k, (a, b)) in clean.iter().zip(&nadir).enumerate() {
+        assert_eq!(mapped(a), mapped(b), "tick {k}");
+    }
+
+    // Jammed from launch, stowed: refused whole while it lasts.
+    let stowed = with(gimbal_jam("drone-east", 0.0, 60.0));
+    let (_, frames) = replay(run_with(&bundle, &stowed));
+    let refused = |frames: &[serde_json::Value], k: usize| {
+        frames[k]["mapping_state"]["belief"]["unsettled_scans"]
+            .as_u64()
+            .unwrap_or(0)
+    };
+    // Each tick of the jam the drone is cruising adds a refused capture.
+    assert!(
+        refused(&frames, 59) >= refused(&clean, 59) + 30,
+        "{} refused",
+        refused(&frames, 59)
+    );
+    let known = |frames: &[serde_json::Value], k: usize| {
+        frames[k]["mapping_state"]["belief"]["known_fraction"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(
+        known(&frames, 59) < known(&clean, 59),
+        "the map falls behind"
+    );
+    assert_eq!(contacts(&frames), 0);
+    let last = frames.last().unwrap();
+    assert_eq!(phase(last), "complete");
+    let pois = last["scan_mission_state"]["poi_statuses"]
+        .as_array()
+        .unwrap();
+    assert!(pois.iter().all(|poi| poi["status"] == "complete"));
+    let radius_m = bundle.mission.as_ref().unwrap().egress_arrival_radius_m;
+    for drone in mobile(last) {
+        let (home, at) = (position(&frames[0], &drone), position(last, &drone));
+        assert!((at[0] - home[0]).hypot(at[1] - home[1]) <= radius_m);
+    }
+
+    let at = 30usize;
+    let mut original = run_with(&bundle, &stowed);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = run_with(&bundle, &stowed);
+    resumed.restore(&checkpoint).expect("restore accepted");
+    let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+        .map(|_| {
+            resumed.step().unwrap();
+            serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(rest, frames[at..]);
+
+    // No rig, no gimbal to jam.
+    let mut run = assemble(&bundle).unwrap();
+    let refused = RunOptions {
+        faults: Some(gimbal_jam("drone-east", 0.0, 60.0)),
+        ..scanner_run(true)
+    }
+    .apply(&mut run, &bundle)
+    .unwrap_err();
+    assert!(refused.contains("gimbal_jam"), "{refused}");
+}

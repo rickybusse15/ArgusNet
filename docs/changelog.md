@@ -34,6 +34,9 @@
   - F2 `nav_camera_outage`: a platform's forward navigation camera sees
     nothing over an interval; it brakes at the camera's declared
     deceleration to a hold in plan and goes on when the camera is back.
+  - F2 `gimbal_jam`: a pod gimbal holds where it is; its captures count as
+    fixed-pointing evidence while it looks within 45° of nadir and are
+    refused past it.
 
   Qualified on West Pleasant View: 15 of 15 unseen seeds pass every gate
   (mission complete in 315 to 463 s, no world contact, 95 to 98% of the map

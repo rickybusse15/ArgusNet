@@ -260,6 +260,9 @@ pub enum PointingSource {
     Stow,
     /// The planner's policy.
     Mission,
+    /// None: the gimbal is jammed (F2's `gimbal_jam`) and holds where it is,
+    /// whatever is commanded. Its encoders still measure where that is.
+    Jammed,
 }
 
 /// One platform's gimbal, as it carries between ticks.
@@ -317,7 +320,17 @@ pub struct PodSensing {
     poles: Arc<Vec<crate::range_scan::SpanPieces>>,
     /// The time between captures, seconds (SR3).
     scan_interval_s: f64,
+    /// Platforms whose gimbal is jammed this tick (F2). Set before every
+    /// tick from the fault schedule; not checkpointed, since the attitude
+    /// it holds is the gimbal's own, which is.
+    jammed: std::collections::BTreeSet<String>,
 }
+
+/// The furthest from nadir a jammed pod's boresight may point and its
+/// captures still count as fixed-pointing survey evidence, degrees. Past it
+/// the rays graze the ground far off, as a stowed pod's do, and the map
+/// refuses them.
+pub const JAMMED_MAX_OFF_NADIR_DEG: f64 = 45.0;
 
 /// The pod's checkpointed state: every platform's gimbal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -356,6 +369,7 @@ impl PodSensing {
             world,
             spans: Arc::new(Vec::new()),
             gimbals: BTreeMap::new(),
+            jammed: std::collections::BTreeSet::new(),
             measured: None,
             poles: Arc::new(Vec::new()),
             scan_interval_s: 1.0,
@@ -414,6 +428,12 @@ impl PodSensing {
 
     pub fn reset(&mut self) {
         self.gimbals.clear();
+    }
+
+    /// The platforms whose gimbal is jammed from now on (F2), until set
+    /// again.
+    pub fn set_jammed(&mut self, nodes: std::collections::BTreeSet<String>) {
+        self.jammed = nodes;
     }
 
     /// The highest the aircraft may fly above the ground it believes and
@@ -496,6 +516,19 @@ impl PodSensing {
                 Quat::from_ypr_deg(gimbal.stow_ypr_deg),
             )
         };
+        if self.jammed.contains(node_id) {
+            // Jammed: it stays where it is. On target or not is still the
+            // attitude against the command, so a pod jammed where it was
+            // already pointing does not have to settle again once freed.
+            state.on_target_since_s =
+                if state.actual.angle_to(command) <= gimbal.settle_tolerance_rad {
+                    state.on_target_since_s.or(Some(t_s))
+                } else {
+                    None
+                };
+            state.last_t_s = Some(t_s);
+            return (PointingSource::Jammed, command, state.clone());
+        }
         let dt = state.last_t_s.map_or(0.0, |last| (t_s - last).max(0.0));
         let start_error = state.actual.angle_to(command);
         let reach = gimbal.max_rate_rad_s * dt;
@@ -572,6 +605,8 @@ impl PodSensing {
         let settled = gimbal
             .on_target_since_s
             .is_some_and(|since| t_s - since >= envelope.settle_s - 1e-9);
+        // A jammed pod is still and its attitude measured: its capture is
+        // fixed-pointing evidence while it looks down steeply enough.
         let body = Quat::from_axis_angle([0.0, 0.0, 1.0], gimbal.heading_rad);
         let base = add(position, body.rotate(envelope.base_lever_arm_m));
         let mount = Quat::from_ypr_deg(self.lidar_mount.rotation_ypr_deg);
@@ -787,7 +822,12 @@ impl PodSensing {
             sensor: ScanSensor::RangeScanner,
             pod: Some(PodCapture {
                 source,
-                settled,
+                settled: if source == PointingSource::Jammed {
+                    let down = -world_sensor_est.rotate([1.0, 0.0, 0.0])[2];
+                    down >= JAMMED_MAX_OFF_NADIR_DEG.to_radians().cos()
+                } else {
+                    settled
+                },
                 command_error_rad: gimbal.actual.angle_to(command),
                 boresight_world: world_sensor_est.rotate([1.0, 0.0, 0.0]),
                 occluded,
