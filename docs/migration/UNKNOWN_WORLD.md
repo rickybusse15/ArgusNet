@@ -365,7 +365,11 @@ they are not mistaken for done:
   are sited clear of power lines. A profile builds configs this way. Without
   the option the builder plans on the true world as before, and a bundle is
   flown as it was built; the replay says which (`meta.world_knowledge.mission_setup`).
-  Follow routes in a tracking scenario are still planned on the true world.
+  The "follow routes" here were the search lanes of search-then-follow
+  drones; built blind, a tracking scenario's lanes are the same over any
+  terrain too. Follow flights themselves are planned at run time on the
+  belief. Mission zones are still anchored to building footprints, as an
+  operator draws them on a site plan: an input, not a truth read.
 - **The lanes still exist.** Explorers start from the builder's lanes and
   return to them when nothing is left to map, and search-then-follow drones fly
   them until they engage. Under `blind_setup` they are straight lanes over

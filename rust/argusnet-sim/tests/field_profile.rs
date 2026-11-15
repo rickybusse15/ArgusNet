@@ -1028,3 +1028,61 @@ fn a_jammed_gimbal_maps_by_fixed_pointing_or_not_at_all() {
     .unwrap_err();
     assert!(refused.contains("gimbal_jam"), "{refused}");
 }
+
+/// A blind setup of a target-tracking scenario plans nothing on the true
+/// world either: the lanes its search-then-follow drones fly until they
+/// engage are the same over any terrain and among any buildings. (Their
+/// follow flight is planned at run time, on the belief, in a run without a
+/// prior map: `world_knowledge.rs`,
+/// `follow_drones_pursue_the_fused_tracks_and_never_read_truth`.)
+#[test]
+fn a_blind_tracking_setup_plans_no_lane_on_the_world() {
+    use argusnet_sim::builder::{build_bundle, ScenarioConfig};
+    let build = |terrain: &str, seed: u32| -> serde_json::Value {
+        let config: ScenarioConfig = serde_json::from_value(serde_json::json!({
+            "format": "argusnet.scenario-config",
+            "version": 1,
+            "seed": seed,
+            "duration_s": 5.0,
+            "options": {
+                "mission_mode": "target_tracking",
+                "map_preset": "large",
+                "target_count": 2,
+                "drone_count": 3,
+                "ground_station_count": 3,
+                "terrain_preset": terrain,
+                "blind_setup": true,
+            },
+        }))
+        .expect("config");
+        build_bundle(&config).expect("bundle builds")
+    };
+    let lanes = |bundle: &serde_json::Value| -> Vec<serde_json::Value> {
+        bundle["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| {
+                node.pointer("/controller/operational/search/waypoints_xy_m")
+                    .cloned()
+            })
+            .collect()
+    };
+    // The same lanes over either terrain, and with either seed.
+    let reference = lanes(&build("urban_flat", 11));
+    assert!(!reference.is_empty(), "the scenario has search lanes");
+    for (terrain, seed) in [("alpine", 11), ("urban_flat", 99), ("alpine", 99)] {
+        assert_eq!(
+            lanes(&build(terrain, seed)),
+            reference,
+            "{terrain}, seed {seed}"
+        );
+    }
+    // Over worlds that do differ: the buildings stand on other ground.
+    let world = |bundle: &serde_json::Value| bundle["world"].clone();
+    assert_ne!(
+        world(&build("urban_flat", 11)),
+        world(&build("alpine", 11)),
+        "the terrains make different worlds"
+    );
+}

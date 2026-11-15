@@ -31,10 +31,9 @@
   flown-energy accounting (F5), drift and mapping-outage faults (F2) and
   mission decision explanations (F3).
 - Remaining gates include complete independent scheduling and pending-job restore,
-  cross-platform determinism, a second real site, navigation-camera and gimbal
-  faults, and separate hardware qualification. Tracking scenarios still plan
-  follow routes on the true world. Python still ships as the reference
-  simulation and offline tooling.
+  cross-platform determinism, a second real site, and separate hardware
+  qualification. Python still ships as the reference simulation and offline
+  tooling.
 
 The dated snapshots below are historical evidence. Use this section and
 [known gaps](KNOWN_GAPS.md) for current status; accepted designs do not establish

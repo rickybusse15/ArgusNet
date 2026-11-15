@@ -112,10 +112,16 @@ The replay says which was used
 (`meta.world_knowledge.mission_setup.poi_hover_agl`: declared, or recovered
 from the true ground for a bundle that declares none).
 
+The same holds for a target-tracking scenario built blind: its
+search-then-follow lanes are the same over any terrain
+(`a_blind_tracking_setup_plans_no_lane_on_the_world`), and its follow
+flights are planned at run time on the belief.
+
 Still from the scenario generator, and so not earned by the platforms:
-station siting itself, the POIs' horizontal places, and, in tracking
-scenarios, follow routes planned on the true world. Localization starts from
-the true pose plus noise.
+station siting itself and the POIs' horizontal places. Mission zones are
+anchored to building footprints, as an operator draws them on a site plan:
+an input, like the POIs, not something the platforms are said to have
+found. Localization starts from the true pose plus noise.
 
 ## Scoring
 
