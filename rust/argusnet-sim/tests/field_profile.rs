@@ -762,3 +762,155 @@ fn drones_keep_their_separation_without_being_put_anywhere() {
     });
     assert!(joined, "both drones were at one POI at some point");
 }
+
+fn camera_outage(node_id: &str, start_s: f64, end_s: f64) -> FaultManifest {
+    FaultManifest {
+        format: MANIFEST_FORMAT.into(),
+        version: MANIFEST_VERSION,
+        faults: vec![Fault::NavCameraOutage {
+            node_id: node_id.into(),
+            start_s,
+            end_s,
+        }],
+    }
+}
+
+/// F2 against the composed mission: one drone's forward navigation camera,
+/// its primary obstacle sensor, sees nothing from 20 s to 60 s, while it
+/// is out exploring. Declared before the run:
+///
+/// - Detection: the fault is named in every frame of its interval and in
+///   no other.
+/// - Containment: the drone brakes to a hold in plan at no more than the
+///   camera's declared 3 m/s²: its distance flown in plan each tick never
+///   grows during the outage, it is at rest within the time it takes to
+///   brake from its cruise speed, and it stays at rest to the end of the
+///   interval. Nothing is flown into, and nothing jumps.
+/// - Terminal state: the mission completes with every POI done and every
+///   drone home.
+/// - A run checkpointed during the hold finishes as the uninterrupted one.
+#[test]
+fn a_navigation_camera_outage_brakes_to_a_hold_and_the_mission_goes_on() {
+    let bundle = bundle();
+    let options = RunOptions {
+        faults: Some(camera_outage("drone-east", 20.0, 60.0)),
+        ..whole_mission()
+    };
+    let (meta, frames) = replay(run_with(&bundle, &options));
+    assert_eq!(
+        meta["fault_manifest"]["faults"][0]["kind"],
+        "nav_camera_outage"
+    );
+    let dt = bundle.dt_s;
+    let tick = |t: f64| (t / dt).round() as usize;
+    let (start, end) = (tick(20.0), tick(60.0));
+
+    // Detection.
+    let named = |frame: &serde_json::Value| {
+        frame["active_faults"].as_array().is_some_and(|faults| {
+            faults
+                .iter()
+                .any(|fault| fault["kind"] == "nav_camera_outage")
+        })
+    };
+    for (k, frame) in frames.iter().enumerate() {
+        assert_eq!(named(frame), (start..end).contains(&k), "tick {k}");
+    }
+
+    // Containment: braking to a hold in plan.
+    let plan_step = |k: usize| {
+        let (a, b) = (
+            position(&frames[k - 1], "drone-east"),
+            position(&frames[k], "drone-east"),
+        );
+        (b[0] - a[0]).hypot(b[1] - a[1])
+    };
+    let cruise = plan_step(start);
+    assert!(
+        cruise > 1.0,
+        "the drone is flying when the camera goes ({cruise} m a tick)"
+    );
+    let mut previous = cruise;
+    for k in start + 1..end {
+        let step = plan_step(k);
+        assert!(
+            step <= previous + 1e-9,
+            "tick {k}: {step} m after {previous} m"
+        );
+        assert!(
+            previous - step <= 3.0 * dt * dt + 1e-9 || step == 0.0,
+            "tick {k}: braked harder than declared, {previous} to {step} m"
+        );
+        previous = step;
+    }
+    let to_rest = (cruise / (3.0 * dt * dt)).ceil() as usize + 1;
+    for k in (start + to_rest).min(end)..end {
+        assert_eq!(plan_step(k), 0.0, "tick {k}: still moving in plan");
+    }
+    assert_eq!(contacts(&frames), 0);
+
+    // Terminal state.
+    let last = frames.last().unwrap();
+    assert_eq!(phase(last), "complete", "the mission completes");
+    let pois = last["scan_mission_state"]["poi_statuses"]
+        .as_array()
+        .unwrap();
+    assert!(pois.iter().all(|poi| poi["status"] == "complete"));
+    let radius_m = bundle.mission.as_ref().unwrap().egress_arrival_radius_m;
+    for drone in mobile(last) {
+        let (home, at) = (position(&frames[0], &drone), position(last, &drone));
+        assert!((at[0] - home[0]).hypot(at[1] - home[1]) <= radius_m);
+    }
+
+    // Resumed during the hold.
+    let at = 40usize;
+    let mut original = run_with(&bundle, &options);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = run_with(&bundle, &options);
+    resumed.restore(&checkpoint).expect("restore accepted");
+    let rest: Vec<serde_json::Value> = (at..bundle.steps as usize)
+        .map(|_| {
+            resumed.step().unwrap();
+            serde_json::to_value(resumed.last_frame().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(rest, frames[at..]);
+}
+
+/// The fallback needs something to fall back with: a run with no
+/// navigation camera, or whose flights are not governed, refuses the fault
+/// before it starts.
+#[test]
+fn a_camera_outage_is_refused_without_a_camera_or_governed_flights() {
+    let bundle = bundle();
+    let fault = Some(camera_outage("drone-east", 20.0, 60.0));
+    for (options, why) in [
+        (
+            RunOptions {
+                faults: fault.clone(),
+                ..scanner_run(true)
+            },
+            "no camera",
+        ),
+        (
+            RunOptions {
+                faults: fault.clone(),
+                exploration: Some(ExplorationConfig {
+                    nav_camera: Some(Default::default()),
+                    ..ExplorationConfig::default()
+                }),
+                world_knowledge: WorldKnowledge::NoPrior,
+                ..RunOptions::default()
+            },
+            "flights not governed",
+        ),
+    ] {
+        let mut run = assemble(&bundle).unwrap();
+        let refused = options.apply(&mut run, &bundle).expect_err(why);
+        assert!(refused.contains("nav_camera_outage"), "{why}: {refused}");
+    }
+}

@@ -41,6 +41,10 @@ pub struct Governed {
     /// set rate, not at once.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
+    /// How far the platform moved in plan last tick, metres: what a hold
+    /// brakes down from. Kept only while braking or held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub braking_step_m: Option<f64>,
 }
 
 /// Holds flights clear of the wires a map believes in.
@@ -57,6 +61,9 @@ pub struct WireGovernor {
     /// whose target lies inside a wire nobody mapped has no plan that helps,
     /// and physics has just said something is there.
     held: BTreeSet<String>,
+    /// The deceleration a platform whose navigation camera is out brakes at
+    /// to a hold in plan (F2); `None` without a camera.
+    hold_braking_mps2: Option<f64>,
 }
 
 impl WireGovernor {
@@ -77,7 +84,14 @@ impl WireGovernor {
             map,
             state: BTreeMap::new(),
             held: BTreeSet::new(),
+            hold_braking_mps2: None,
         }
+    }
+
+    /// Brake a platform whose navigation camera is out at `braking_mps2`.
+    pub fn with_hold_braking(mut self, braking_mps2: Option<f64>) -> Self {
+        self.hold_braking_mps2 = braking_mps2;
+        self
     }
 
     /// Whether mission flights are kept above the believed surface.
@@ -242,6 +256,7 @@ impl WireGovernor {
             offset_m: 0.0,
             climb_to_m: None,
             handed_over: false,
+            braking_step_m: None,
         };
         self.surface_step(flown, commanded_m, commanded_m[2], path_m, dt_s)
             .0
@@ -257,6 +272,7 @@ impl WireGovernor {
         guard: Option<&PhysicalGuard>,
         missions: &BTreeMap<String, [f64; 2]>,
         rejoining: &BTreeSet<String>,
+        camera_out: &BTreeSet<String>,
     ) -> (usize, Vec<String>) {
         let dt_s = context.dt_s;
         let timestamp_s = context.timestamp_s;
@@ -282,6 +298,7 @@ impl WireGovernor {
                 offset_m: 0.0,
                 climb_to_m: None,
                 handed_over: false,
+                braking_step_m: None,
             });
             let held = self.held.contains(&node_id);
             let wire_z = self.wire_height(flown, commanded_m, dt_s, held);
@@ -308,6 +325,31 @@ impl WireGovernor {
                     let fz = flown.position_m[2];
                     position[2] = wire_z.clamp(fz - reach_z, fz + reach_z);
                 }
+            }
+            // Its primary obstacle sensor out: brake to a hold in plan from
+            // how fast it was going, at the camera's declared deceleration.
+            // Height control goes on; it reads the believed map, not the
+            // camera.
+            let mut braking_step_m = None;
+            if let (Some(braking), true) = (self.hold_braking_mps2, camera_out.contains(&node_id)) {
+                let [fx, fy, _] = flown.position_m;
+                let last = flown.braking_step_m.unwrap_or_else(|| {
+                    self.state
+                        .get(&node_id)
+                        .map_or(0.0, |_| (position[0] - fx).hypot(position[1] - fy))
+                });
+                let allowed = (last - braking * dt_s * dt_s).max(0.0);
+                let (dx, dy) = (position[0] - fx, position[1] - fy);
+                let step = dx.hypot(dy);
+                if step > allowed {
+                    let scale = if step > 1e-12 { allowed / step } else { 0.0 };
+                    position[0] = fx + dx * scale;
+                    position[1] = fy + dy * scale;
+                    if mission.is_some() && !waited.contains(&node_id) {
+                        waited.push(node_id.clone());
+                    }
+                }
+                braking_step_m = Some(allowed.min(step));
             }
             if let Some(guard) = guard {
                 if mission.is_some() {
@@ -351,6 +393,7 @@ impl WireGovernor {
                     offset_m: if offset_m.abs() < 1e-9 { 0.0 } else { offset_m },
                     climb_to_m: climb_to_m.filter(|to| position[2] + 1e-9 < *to),
                     handed_over,
+                    braking_step_m,
                 },
             );
         }
@@ -399,6 +442,7 @@ mod tests {
             offset_m: 0.0,
             climb_to_m: None,
             handed_over: false,
+            braking_step_m: None,
         }
     }
 
@@ -499,6 +543,7 @@ mod tests {
             offset_m: 0.0,
             climb_to_m: None,
             handed_over: false,
+            braking_step_m: None,
         }
     }
 

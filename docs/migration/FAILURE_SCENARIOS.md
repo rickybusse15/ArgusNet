@@ -26,6 +26,7 @@ An `argusnet.fault-manifest` (version 1) lists faults by simulated time:
 | `source_restart` | The node's transport restarts: a new source epoch, so its in-flight evidence is dropped as `delivery_stale_epoch`. | B4 delivery |
 | `calibration_drift` | The node's bearing calibration drifts at `rate_rad_per_s` over `[start_s, end_s)` and stays where it got to, since nothing recalibrates it. The offset adds to the sensor's bias walk and survives an outage's restart. (Second slice, 2026-10-23.) | — |
 | `mapping_outage` | The platform's mapping payload (the rig's pod LiDAR, or the range scanner) returns nothing over `[start_s, end_s)`: no ground, structure or wire evidence from it reaches the map. Its navigation camera goes on seeing. | A run that maps for itself (`--world-knowledge none`, or a profile) |
+| `nav_camera_outage` | The platform's forward navigation camera, its primary obstacle sensor, sees nothing over `[start_s, end_s)`. Declared fallback: it brakes at the camera's declared deceleration to a hold in plan, keeps its height control (which reads the believed map), and goes on when the camera is back. Mission flights are delayed while held, never jumped. | A navigation camera and governed flights (`mission_flights`, as in `field_v1`) |
 
 The manifest is validated against the run before any tick. It is refused
 (`argusnet-rs` exit 3, with the reason) when:
@@ -154,7 +155,32 @@ flies its capture (gimbal, clock); only what it would have returned is
 withheld. A manifest with a `mapping_outage` is refused in a run with a prior
 map, which has no mapping payload.
 
-Still not covered: a navigation-camera fault (speed is capped fleet-wide from
-the camera's envelope at assembly, so a per-platform degraded envelope needs
-per-platform caps), a gimbal fault, and any hold or return response to a
-fault.
+## Fourth slice: losing the navigation camera (2026-11-15)
+
+The composed mission avoids what it has not mapped with the forward
+navigation camera. `nav_camera_outage` takes it away. Speed is capped
+fleet-wide from the camera's envelope when the run is assembled, so the
+fallback acts where every platform's motion already passes, stage 2's
+governor: a platform whose camera is out brakes at the camera's declared
+deceleration (3 m/s²) to a hold in plan. Explorers go on from where the
+aircraft is once it falls behind them, a held mission flight's plan is
+delayed a tick at a time, and a rejoin resumes from where it holds, so
+nothing jumps when the camera is back.
+
+Case G (`a_navigation_camera_outage_brakes_to_a_hold_and_the_mission_goes_on`,
+`tests/field_profile.rs`) takes drone-east's camera out over [20 s, 60 s)
+while it explores. Declared before the run, and held:
+
+- detection: every frame of the interval names the fault, and no other;
+- containment: its distance flown in plan each tick never grows during the
+  outage and never falls by more than the declared braking allows; it is at
+  rest within the time to brake from its cruise speed and stays at rest to
+  the end of the interval; no world contact;
+- terminal state: the mission completes, every POI done, every drone home;
+- a run checkpointed during the hold finishes as the uninterrupted one.
+
+Refused before the run without a navigation camera, or without governed
+flights to fall back with.
+
+Still not covered: a gimbal fault, a degraded (rather than lost) camera
+envelope per platform, and return-home as a fault response.

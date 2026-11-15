@@ -512,6 +512,9 @@ pub struct ObserveStage {
     /// `mapping_outage`). Set before every tick from the fault schedule, a
     /// pure function of the tick, so a checkpoint carries none of it.
     mapping_out: std::collections::BTreeSet<String>,
+    /// Platforms whose navigation camera sees nothing this tick (F2's
+    /// `nav_camera_outage`). Set before every tick, like `mapping_out`.
+    camera_out: std::collections::BTreeSet<String>,
 }
 
 /// Sensors capturing at their own rates rather than every tick.
@@ -634,6 +637,7 @@ impl ObserveStage {
             capture: None,
             bias_offsets: BTreeMap::new(),
             mapping_out: std::collections::BTreeSet::new(),
+            camera_out: std::collections::BTreeSet::new(),
         }
     }
 
@@ -830,7 +834,13 @@ impl ObserveStage {
                 let (position, velocity) = pose(platform);
                 camera.frame(&platform.node_id, tick, timestamp_s, position, velocity)
             });
-            self.scans.extend(frames);
+            // A camera that is out sees nothing: no frame, no evidence.
+            let camera_out = &self.camera_out;
+            self.scans.extend(
+                frames
+                    .into_iter()
+                    .filter(|frame| !camera_out.contains(&frame.node_id)),
+            );
         }
     }
 
@@ -862,6 +872,12 @@ impl ObserveStage {
     /// measured from the datum.
     pub fn set_terrain(&mut self, terrain: Box<dyn TerrainHeight>) {
         self.state.terrain = terrain;
+    }
+
+    /// The platforms whose navigation camera sees nothing from now on
+    /// (F2's `nav_camera_outage`), until set again.
+    pub fn set_camera_out(&mut self, nodes: std::collections::BTreeSet<String>) {
+        self.camera_out = nodes;
     }
 
     /// The platforms whose mapping payload returns nothing from now on

@@ -273,8 +273,12 @@ it ends where it is allowed to), and the closest approach to a conductor
   finishes exactly as the uninterrupted one. The governor's state, flight
   delays and deconfliction offsets are in the checkpoint.
 - `mapping_outage` (F2, [FAILURE_SCENARIOS.md](FAILURE_SCENARIOS.md)): one
-  drone's mapping LiDAR out for 80 s. The mission completes later, with no
-  contact, every POI done and every drone home.
+  drone's mapping LiDAR out for 80 s. The mission completes with no
+  contact, every POI done and every drone home, and the scan ends only once
+  the run's own map meets the gate.
+- `nav_camera_outage`: one drone's forward camera out for 40 s while it
+  explores. It brakes at the declared 3 m/s² to a hold in plan and holds
+  to the end of the outage; the mission completes with no contact.
 
 Bounded causal jobs and restore with pending jobs (P4.10d–e) are not part of
 this.
@@ -291,6 +295,7 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - The map requirement's vertical sigma is still judged from the returns'
   own spread and a declared bias; nothing yet compares predicted against
   achieved quality on a run (the sensing guide's SR5d).
-- No navigation-camera or gimbal fault, no pointing arbiter, no view
-  planning, no hold or return response to a fault.
+- No gimbal fault, no pointing arbiter, no view planning, and no return
+  home as a fault response (a lost navigation camera is answered with a
+  braked hold).
 - No landing: home is a hover at the station.

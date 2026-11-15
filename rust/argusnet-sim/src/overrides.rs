@@ -399,6 +399,9 @@ struct State {
     lines: Vec<KnownLine>,
     /// Holds every flight clear of the wires believed (W4).
     governor: Option<crate::wire_governor::WireGovernor>,
+    /// Platforms whose navigation camera is out this tick (F2), which the
+    /// governor brakes to a hold. Set before every tick; not checkpointed.
+    camera_out: std::collections::BTreeSet<String>,
 }
 
 /// A power line a rejoin keeps clear of, with the space within its
@@ -1018,7 +1021,21 @@ impl StageHandler for MissionOverrideStage {
             }
         }
         let rejoining = self.state.rejoining.keys().cloned().collect();
-        let (held, waited) = governor.govern(context, guard, &missions, &rejoining);
+        let camera_out = &self.state.camera_out;
+        let (held, waited) = governor.govern(context, guard, &missions, &rejoining, camera_out);
+        // A rejoin the governor held goes on from where it holds.
+        for node_id in camera_out {
+            if let (Some(at), Some(platform)) = (
+                self.state.rejoining.get_mut(node_id),
+                context.world.platform_mut(node_id),
+            ) {
+                *at = [
+                    platform.position.x,
+                    platform.position.y,
+                    platform.position.z,
+                ];
+            }
+        }
         // A flight that waited is a tick later than planned, in every
         // table that holds one for it: whichever flies it next goes on
         // from where it is.
@@ -1059,6 +1076,19 @@ impl StageHandler for MissionOverrideStage {
 }
 
 impl MissionOverrideStage {
+    /// The platforms whose navigation camera is out from now on (F2).
+    pub fn set_camera_out(&mut self, nodes: std::collections::BTreeSet<String>) {
+        self.state.camera_out = nodes;
+    }
+
+    /// Whether this stage keeps mission flights over the believed surface.
+    pub fn governs_mission_flights(&self) -> bool {
+        self.state
+            .governor
+            .as_ref()
+            .is_some_and(|governor| governor.governs_mission_flights())
+    }
+
     /// Hold every flight clear of the wires believed (W4).
     pub fn set_wire_governor(&mut self, governor: Option<crate::wire_governor::WireGovernor>) {
         self.state.governor = governor;

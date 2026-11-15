@@ -812,6 +812,9 @@ pub struct AssembledRun {
     /// Whether the fault schedule takes a mapping payload out, which only a
     /// run that maps for itself has.
     faults_need_mapping: bool,
+    /// Whether it takes a navigation camera out, which needs a camera and
+    /// governed flights to fall back with.
+    faults_need_camera: bool,
     /// The hover height each POI declares (`blind_setup`), by id.
     poi_hover_agl_m: BTreeMap<String, f64>,
     /// Scheduled sensor and link faults (F2), applied before every tick.
@@ -1424,6 +1427,7 @@ pub fn assemble_with(
 
     Ok(AssembledRun {
         faults_need_mapping: false,
+        faults_need_camera: false,
         poi_hover_agl_m: bundle
             .mission
             .iter()
@@ -2106,6 +2110,7 @@ impl AssembledRun {
         let speed_cap_mps = camera
             .as_ref()
             .map(|camera| camera.envelope().max_speed_mps);
+        let camera_braking_mps2 = camera.as_ref().map(|camera| camera.config().braking_mps2);
         if let Some(cap) = speed_cap_mps {
             controllers.cap_speeds(cap);
         }
@@ -2249,6 +2254,7 @@ impl AssembledRun {
                         mission_flights,
                         governed_map,
                     )
+                    .with_hold_braking(camera_braking_mps2)
                 }),
             );
         }
@@ -2266,6 +2272,20 @@ impl AssembledRun {
                 "mapping_outage takes out a mapping payload, which only a run with                  world knowledge `none` flies"
                     .into(),
             );
+        }
+        if self.faults_need_camera {
+            let camera = self.observe().nav_camera().is_some();
+            let governed = self
+                .sim
+                .stage::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+                .is_some_and(|overrides| overrides.governs_mission_flights());
+            if !(camera && governed) {
+                return Err(
+                    "nav_camera_outage needs a navigation camera and flights governed over \
+                     the believed surface (mission_flights) to fall back with"
+                        .into(),
+                );
+            }
         }
         Ok(())
     }
@@ -2319,6 +2339,7 @@ impl AssembledRun {
             lag_and_jitter.map(|_| &fits as &dyn Fn(u64) -> Result<(), String>),
         )?;
         self.faults_need_mapping = schedule.has_mapping_outages();
+        self.faults_need_camera = schedule.has_camera_outages();
         self.replay.extend_meta([(
             "fault_manifest".to_string(),
             serde_json::to_value(schedule.manifest()).expect("manifest serialises"),
@@ -2343,11 +2364,19 @@ impl AssembledRun {
             .map(|(node, offset)| (node.to_string(), offset))
             .collect();
         let mapping_out = schedule.mapping_out(tick);
+        let camera_out = schedule.camera_out(tick);
+        if let Some(overrides) = self
+            .sim
+            .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
+        {
+            overrides.set_camera_out(camera_out.clone());
+        }
         let observe = self
             .sim
             .stage_mut::<ObserveStage>(Stage::GenerateObservations)
             .expect("assembly installs an ObserveStage");
         observe.set_mapping_out(mapping_out);
+        observe.set_camera_out(camera_out);
         for (node, offset) in offsets {
             observe.set_bias_offset(&node, offset);
         }

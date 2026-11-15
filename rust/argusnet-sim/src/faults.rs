@@ -19,6 +19,12 @@
 //!   no ground, structure or wire evidence from it reaches the map. Its
 //!   navigation camera is a separate sensor and goes on seeing. Needs a
 //!   run that maps for itself (`world_knowledge: none`).
+//! - **`nav_camera_outage`**: a platform's forward navigation camera, its
+//!   primary obstacle sensor, sees nothing over `[start_s, end_s)`. The
+//!   declared fallback: it brakes at the camera's declared deceleration to
+//!   a hold in plan, keeping its height control, and goes on once the
+//!   camera is back. Needs a navigation camera and governed flights
+//!   (`mission_flights`).
 //!
 //! Outages, delays and drift offsets are a pure function of the tick and are re-applied
 //! idempotently before every tick, so a checkpoint needs no extra state to
@@ -59,6 +65,11 @@ pub enum Fault {
         rate_rad_per_s: f64,
     },
     MappingOutage {
+        node_id: String,
+        start_s: f64,
+        end_s: f64,
+    },
+    NavCameraOutage {
         node_id: String,
         start_s: f64,
         end_s: f64,
@@ -105,6 +116,8 @@ pub struct FaultSchedule {
     specs: BTreeMap<String, SensorSpec>,
     /// `(node, start tick, end tick)`, end exclusive.
     mapping_outages: Vec<(String, u64, u64)>,
+    /// `(node, start tick, end tick)`, end exclusive.
+    camera_outages: Vec<(String, u64, u64)>,
 }
 
 impl FaultSchedule {
@@ -148,6 +161,7 @@ impl FaultSchedule {
             drifts: Vec::new(),
             specs: BTreeMap::new(),
             mapping_outages: Vec::new(),
+            camera_outages: Vec::new(),
         };
         for fault in &manifest.faults {
             match fault {
@@ -219,6 +233,15 @@ impl FaultSchedule {
                     let (start, end) = interval(node_id, *start_s, *end_s)?;
                     schedule.mapping_outages.push((node_id.clone(), start, end));
                 }
+                Fault::NavCameraOutage {
+                    node_id,
+                    start_s,
+                    end_s,
+                } => {
+                    known(node_id)?;
+                    let (start, end) = interval(node_id, *start_s, *end_s)?;
+                    schedule.camera_outages.push((node_id.clone(), start, end));
+                }
             }
         }
         Ok(schedule)
@@ -253,6 +276,7 @@ impl FaultSchedule {
             .filter(|fault| match fault {
                 Fault::SensorOutage { start_s, end_s, .. }
                 | Fault::MappingOutage { start_s, end_s, .. }
+                | Fault::NavCameraOutage { start_s, end_s, .. }
                 | Fault::LinkDelay { start_s, end_s, .. }
                 | Fault::CalibrationDrift { start_s, end_s, .. } => within(*start_s, *end_s),
                 Fault::SourceRestart { at_s, .. } => tick_of(*at_s, dt_s) == tick,
@@ -297,6 +321,20 @@ impl FaultSchedule {
     /// The nodes whose mapping payload returns nothing at `tick`.
     pub fn mapping_out(&self, tick: u64) -> std::collections::BTreeSet<String> {
         self.mapping_outages
+            .iter()
+            .filter(|(_, start, end)| (*start..*end).contains(&tick))
+            .map(|(node, _, _)| node.clone())
+            .collect()
+    }
+
+    /// Whether the manifest takes any navigation camera out.
+    pub fn has_camera_outages(&self) -> bool {
+        !self.camera_outages.is_empty()
+    }
+
+    /// The nodes whose navigation camera sees nothing at `tick`.
+    pub fn camera_out(&self, tick: u64) -> std::collections::BTreeSet<String> {
+        self.camera_outages
             .iter()
             .filter(|(_, start, end)| (*start..*end).contains(&tick))
             .map(|(node, _, _)| node.clone())
