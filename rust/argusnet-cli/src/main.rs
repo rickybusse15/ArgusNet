@@ -203,7 +203,8 @@ struct SimArgs {
     /// map, the provisional rig with LiDAR returns, measured and tracked
     /// power lines with poles and wire-aware flight, mission flights over
     /// the believed surface, `flown_v1` energy, `contingency_v1` planning,
-    /// and a declared map requirement). The flags it sets are refused with
+    /// and a declared map requirement); `field_v2` adds view planning and
+    /// is not yet qualified. The flags it sets are refused with
     /// it; faults, delivery and rates still apply. Recorded in the replay's
     /// `meta.run_profile`.
     #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse)]
@@ -303,6 +304,18 @@ struct SimArgs {
     /// the track) or `body:YAW,PITCH,ROLL` (fixed in the body, degrees).
     #[arg(long)]
     pointing: Option<String>,
+    /// View planning (SR5d), with `--rig-profile` and
+    /// `--quality-requirements`: explorers cruise to the deficit worth most
+    /// per watt-hour, and the pod rolls across the track toward the
+    /// deficits its footprint can fix. Its energy model is assumed. Replaces
+    /// `--pointing`.
+    #[arg(long)]
+    view_planning: bool,
+    /// The view planner's parameters as JSON (`ViewPlanningConfig`: deficit
+    /// weights, energy, goal distances, roll range), instead of the assumed
+    /// default. Implies `--view-planning`.
+    #[arg(long)]
+    view_planning_profile: Option<PathBuf>,
     /// With `--rig-profile`, model the pod LiDAR's returns (SR3): each ray
     /// fires at its own time across the capture, returns only with the
     /// chance its reflectivity, incidence and range give, and carries range
@@ -529,6 +542,19 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             }
         });
     let pointing = args.pointing.as_deref().map(parse_pointing).transpose()?;
+    let view_planning = match &args.view_planning_profile {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(
+                serde_json::from_str::<argusnet_planning::views::ViewPlanningConfig>(&text)
+                    .map_err(|error| format!("{}: {error}", path.display()))?,
+            )
+        }
+        None => args
+            .view_planning
+            .then(argusnet_planning::views::ViewPlanningConfig::default),
+    };
     let measured_wires = match &args.wire_sensor_profile {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -692,6 +718,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 wire_planning: args
                     .wire_planning
                     .then(argusnet_sim::belief_world::WirePlanningConfig::default),
+                view_planning: view_planning.clone(),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -938,6 +965,17 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--rig-profile and --pointing fly a sensor rig in a --world-knowledge none run",
+        );
+    }
+    if (args.view_planning || args.view_planning_profile.is_some())
+        && (args.rig_profile.is_none()
+            || args.quality_requirements.is_none()
+            || args.pointing.is_some())
+    {
+        return fail(
+            EXIT_INVALID,
+            "--view-planning points a rig's pod by a quality requirement: it needs \
+             --rig-profile and --quality-requirements, and replaces --pointing",
         );
     }
     if args.lidar_returns && args.rig_profile.is_none() {
