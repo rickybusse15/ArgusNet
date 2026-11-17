@@ -100,7 +100,7 @@ fn mobile(frame: &serde_json::Value) -> Vec<String> {
 #[test]
 fn the_profile_names_itself_and_everything_it_composes() {
     assert_eq!(RunProfile::parse("field_v1"), Ok(RunProfile::FieldV1));
-    assert!(RunProfile::parse("field_v2").is_err());
+    assert!(RunProfile::parse("field_v9").is_err());
     let options = RunProfile::FieldV1.options();
     assert!(!options.is_legacy());
     let bundle = bundle();

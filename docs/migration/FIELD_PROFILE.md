@@ -292,7 +292,45 @@ it ends where it is allowed to), and the closest approach to a conductor
 Bounded causal jobs and restore with pending jobs (P4.10d–e) are not part of
 this.
 
+## Field profile v2 (in progress, not qualified)
+
+`--profile field_v2` is `field_v1` plus what later slices add. It has its own
+draft thresholds (`docs/contracts/field_v2.thresholds.json`, a copy of v1's
+until they are frozen) and no qualification campaign yet: the figures below
+are from tuning seeds and count for nothing.
+
+**View planning (SR5d, [VIEW_PLANNING.md](VIEW_PLANNING.md)).** Explorers
+cruise to the deficit worth most per watt-hour, costed with the run's battery
+model over the believed ground, instead of to the nearest. A planned leg pays
+for a wire it would cross and for a goal already reached as the energy to fly
+that much further, so W4's crossing cost and W6's spent goals still apply.
+
+West Pleasant View, 600 s, the eight seeds `field_v1` was tuned on. Both
+profiles pass every gate on all eight.
+
+| Seed | Mission complete, s (v1 → v2) | Cells meeting the requirement | Lowest reserve margin, Wh |
+| --- | --- | --- | --- |
+| 7 | 358 → 327 | 0.912 → 0.909 | 319 → 321 |
+| 42 | 376 → 290 | 0.908 → 0.915 | 316 → 326 |
+| 707 | 530 → 371 | 0.940 → 0.943 | 311 → 317 |
+| 1010 | 371 → 284 | 0.936 → 0.907 | 317 → 322 |
+| 4451 | 421 → 269 | 0.912 → 0.922 | 311 → 322 |
+| 9002 | 352 → 306 | 0.928 → 0.934 | 318 → 317 |
+| 9005 | 355 → 293 | 0.916 → 0.916 | 314 → 323 |
+| 13127 | 397 → 328 | 0.930 → 0.927 | 311 → 319 |
+
+The mission completes 9% to 36% sooner on every seed (median 19%). The scan
+ends when the gate is met, so the share of cells meeting the requirement is
+about the same by design; seed 1010 ends nearer the gate (0.907 against
+0.90). Closest approach to a conductor stays above 17 m on all eight.
+
+`field_v1` itself is unchanged: its West Pleasant View replay is
+byte-identical to the build before, and the canonical replays are 14 of 14.
+
 ## Tests
+
+`rust/argusnet-sim/tests/field_v2.rs` (3: the profile is `field_v1` and what
+it adds, deterministic with exact resume, the whole mission touches nothing).
 
 `rust/argusnet-sim/tests/field_profile.rs` (15), the governor's and the
 deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
@@ -304,7 +342,7 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - The map requirement's vertical sigma is still judged from the returns'
   own spread and a declared bias; nothing yet compares predicted against
   achieved quality on a run (the sensing guide's SR5d).
-- No pointing arbiter, no view planning, and no return home as a fault
-  response (a lost navigation camera is answered with a braked hold, a
+- No pointing arbiter, no view planning (`field_v2` adds it, unqualified),
+  and no return home as a fault response (a lost navigation camera is answered with a braked hold, a
   jammed gimbal with fixed pointing).
 - No landing: home is a hover at the station.

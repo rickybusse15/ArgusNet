@@ -333,6 +333,9 @@ argusnet-rs sim --config runs/site/scenario.json --profile field_v1 --replay run
 cargo run -p argusnet-viewer -- --run runs/site/scenario.json --profile field_v1
 ```
 
+`--profile field_v2` adds view planning to it (explorers go to the deficit
+worth most per watt-hour). It is not yet qualified.
+
 A config run this way is built for platforms that do not know the world
 (`blind_setup`). See [FIELD_PROFILE.md](migration/FIELD_PROFILE.md) for what
 it composes, what it was qualified on and what it does not claim. To score a
