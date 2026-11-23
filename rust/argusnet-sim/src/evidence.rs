@@ -160,8 +160,12 @@ pub trait Eyes {
     fn floor_m(&self, xy_m: [f64; 2]) -> f64;
     /// Whether, as the map has it, a point can be seen from a place.
     fn expects_to_see(&self, from_m: [f64; 3], point_m: [f64; 3]) -> bool;
-    /// Whether the image `drone_id` takes where it believes it is shows it.
-    fn shows(&self, drone_id: &str, from_m: [f64; 3], point_m: [f64; 3]) -> bool;
+    /// Where the image `drone_id` takes while it believes it is at `believed_m`
+    /// is taken from. The image itself says: it is how far off and from which way
+    /// round the point is in it.
+    fn camera_m(&self, drone_id: &str, believed_m: [f64; 3]) -> [f64; 3];
+    /// Whether an image taken there shows the point.
+    fn shows(&self, camera_m: [f64; 3], point_m: [f64; 3]) -> bool;
 }
 
 /// The drones' own map, and the world for what an image would show.
@@ -199,8 +203,12 @@ impl Eyes for MapEyes {
             .is_visible(from_m, point_m)
     }
 
-    fn shows(&self, drone_id: &str, from_m: [f64; 3], point_m: [f64; 3]) -> bool {
-        self.world.sees(drone_id, from_m, point_m)
+    fn camera_m(&self, drone_id: &str, believed_m: [f64; 3]) -> [f64; 3] {
+        self.world.true_position_m(drone_id, believed_m)
+    }
+
+    fn shows(&self, camera_m: [f64; 3], point_m: [f64; 3]) -> bool {
+        self.world.sees(camera_m, point_m)
     }
 }
 
@@ -290,6 +298,8 @@ impl EvidenceState {
             };
             let off = (tour.viewpoint_m[0] - at[0]).hypot(tour.viewpoint_m[1] - at[1]);
             if off > ARRIVED_M {
+                // Off it, whatever moved it: the hold is of one stay.
+                tour.arrived_s = None;
                 continue;
             }
             let arrived = *tour.arrived_s.get_or_insert(timestamp_s);
@@ -299,7 +309,10 @@ impl EvidenceState {
             let tour = self.tours.remove(drone).expect("just found");
             let point_m = where_is[tour.poi_id.as_str()];
             let point = self.points.get_mut(&tour.poi_id).expect("listed");
-            let d: [f64; 3] = std::array::from_fn(|k| at[k] - point_m[k]);
+            // Everything asked of a view is asked of the image taken, from where
+            // it was taken.
+            let camera = eyes.camera_m(drone, *at);
+            let d: [f64; 3] = std::array::from_fn(|k| camera[k] - point_m[k]);
             let plan = d[0].hypot(d[1]);
             let (range, elevation) = (plan.hypot(d[2]), d[2].atan2(plan).to_degrees());
             let azimuth = d[1].atan2(d[0]).to_degrees().rem_euclid(360.0);
@@ -307,7 +320,7 @@ impl EvidenceState {
             let shown = range <= config.max_range_m
                 && (low..=high).contains(&elevation)
                 && Self::adds(config, point, azimuth)
-                && eyes.shows(drone, *at, point_m);
+                && eyes.shows(camera, point_m);
             if shown {
                 point.views.push(View {
                     drone_id: drone.clone(),
@@ -476,6 +489,8 @@ mod tests {
         hidden_deg: Vec<(f64, f64)>,
         expects_hidden: bool,
         floor_m: f64,
+        /// Where the camera is, off where it is believed to be.
+        off_m: [f64; 3],
     }
 
     impl Where {
@@ -498,8 +513,11 @@ mod tests {
         fn expects_to_see(&self, from: [f64; 3], point: [f64; 3]) -> bool {
             !self.expects_hidden || self.open(from, point)
         }
-        fn shows(&self, _drone: &str, from: [f64; 3], point: [f64; 3]) -> bool {
-            self.open(from, point)
+        fn camera_m(&self, _drone: &str, believed: [f64; 3]) -> [f64; 3] {
+            std::array::from_fn(|k| believed[k] + self.off_m[k])
+        }
+        fn shows(&self, camera: [f64; 3], point: [f64; 3]) -> bool {
+            self.open(camera, point)
         }
     }
 
@@ -616,6 +634,7 @@ mod tests {
                 hidden_deg: one_side.clone(),
                 expects_hidden,
                 floor_m: 0.0,
+                off_m: [0.0; 3],
             };
             let config = EvidenceConfig {
                 max_tries: 5,
@@ -636,6 +655,65 @@ mod tests {
         let mut state = EvidenceState::default();
         fly(&mut state, &EvidenceConfig::default(), &eyes, &points(1), 1);
         assert_eq!(state.points["poi-0"].verdict, Some(Verdict::NoViewpoint));
+    }
+
+    /// A drone that is not where it believes: what it is asked of its views is
+    /// asked from where they were taken. 45 m off to the east, a viewpoint to the
+    /// east is too far and one to the west too steep or on the other side.
+    #[test]
+    fn a_view_is_judged_from_where_it_was_taken() {
+        let config = EvidenceConfig::default();
+        let eyes = Where {
+            off_m: [45.0, 0.0, 0.0],
+            ..Where::default()
+        };
+        let mut state = EvidenceState::default();
+        fly(&mut state, &config, &eyes, &points(1), 1);
+        let point = &state.points["poi-0"];
+        assert!(!point.failed_deg.is_empty(), "{point:?}");
+        for view in &point.views {
+            assert!(view.range_m <= config.max_range_m, "{view:?}");
+            assert!((15.0..=75.0).contains(&view.elevation_deg), "{view:?}");
+        }
+        // The one due east of it is 85 m away, whatever it believes.
+        let mut state = EvidenceState::default();
+        let at = vec![("d".to_string(), [200.0, 0.0, 60.0])];
+        let actions = state.run(&config, 0.0, &points(1), &at, &eyes);
+        let Action::Go { viewpoint_m, .. } = &actions[0] else {
+            panic!("{actions:?}")
+        };
+        assert!(viewpoint_m[0] > 30.0 && viewpoint_m[1].abs() < 1.0);
+        let there = vec![("d".to_string(), *viewpoint_m)];
+        state.run(&config, 1.0, &points(1), &there, &eyes);
+        let actions = state.run(&config, 3.0, &points(1), &there, &eyes);
+        assert!(matches!(&actions[0], Action::Viewed { shown: false, .. }));
+    }
+
+    /// The hold is of one stay: time off the viewpoint is none of it.
+    #[test]
+    fn a_drone_pushed_off_its_viewpoint_holds_again() {
+        let config = EvidenceConfig::default();
+        let eyes = Where::default();
+        let mut state = EvidenceState::default();
+        let far = vec![("d".to_string(), [200.0, 0.0, 60.0])];
+        let actions = state.run(&config, 0.0, &points(1), &far, &eyes);
+        let Action::Go { viewpoint_m, .. } = &actions[0] else {
+            panic!("{actions:?}")
+        };
+        let there = vec![("d".to_string(), *viewpoint_m)];
+        let pushed = vec![(
+            "d".to_string(),
+            [viewpoint_m[0] + 20.0, viewpoint_m[1], viewpoint_m[2]],
+        )];
+        let mut run = |t: f64, at: &[(String, [f64; 3])]| {
+            let actions = state.run(&config, t, &points(1), at, &eyes);
+            actions.iter().any(|a| matches!(a, Action::Viewed { .. }))
+        };
+        assert!(!run(10.0, &there));
+        assert!(!run(11.0, &pushed));
+        assert!(!run(20.0, &there), "back, and not yet held");
+        assert!(!run(21.0, &there));
+        assert!(run(22.0, &there), "two seconds in one stay");
     }
 
     #[test]
