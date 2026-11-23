@@ -36,7 +36,7 @@ from argusnet.evaluation.field_qualification import (  # noqa: E402
 )
 from argusnet.world.world_import import import_world  # noqa: E402
 
-#: The fifth set, chosen before its campaign ran (2026-11-14). The fourth
+#: ``field_v1``: the fifth set, chosen before its campaign ran (2026-11-14). The fourth
 #: set (23131..33149, held out 9301..9305) qualified, but on sensing that
 #: put every pod LiDAR ground return about 0.7 m low; terrain returns were
 #: put on the ray after it (found by analysis, not from its results), so
@@ -49,9 +49,19 @@ from argusnet.world.world_import import import_world  # noqa: E402
 #: - the third (12007..22073, held out 9201..9205) failed it on another.
 #: Each failing seed is re-run as a tuning seed, with the two the profile
 #: was composed on.
-QUALIFICATION_SEEDS = [34253, 35363, 36467, 37571, 38693, 39799, 40903, 42013, 43117, 44221]
-HELDOUT_SEEDS = [9401, 9402, 9403, 9404, 9405]
-TUNING_SEEDS = [7, 42, 707, 1010, 9002, 9005, 4451, 13127]
+FIELD_V1_SEEDS = {
+    "qualification": [34253, 35363, 36467, 37571, 38693, 39799, 40903, 42013, 43117, 44221],
+    "heldout": [9401, 9402, 9403, 9404, 9405],
+    "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
+}
+#: ``field_v2``: the first set, chosen before its campaign ran (2026-11-22);
+#: no campaign of either profile has used any of them.
+FIELD_V2_SEEDS = {
+    "qualification": [45329, 46439, 47543, 48647, 49757, 50867, 51971, 53077, 54181, 55291],
+    "heldout": [9501, 9502, 9503, 9504, 9505],
+    "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
+}
+PROFILE_SEEDS = {"field_v1": FIELD_V1_SEEDS, "field_v2": FIELD_V2_SEEDS}
 
 
 def run_seed(binary: Path, config: dict, directory: Path, seed: int, profile: str) -> dict:
@@ -98,12 +108,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--profile", default="field_v1")
     parser.add_argument(
-        "--thresholds", type=Path, default=ROOT / "docs/contracts/field_v1.thresholds.json"
+        "--thresholds",
+        type=Path,
+        default=None,
+        help="the profile's own in docs/contracts when not given",
     )
     parser.add_argument("--binary", type=Path, default=ROOT / "target/release/argusnet-rs")
-    parser.add_argument("--seeds", type=int, nargs="+", default=QUALIFICATION_SEEDS)
-    parser.add_argument("--heldout-seeds", type=int, nargs="*", default=HELDOUT_SEEDS)
-    parser.add_argument("--tuning-seeds", type=int, nargs="*", default=TUNING_SEEDS)
+    parser.add_argument("--seeds", type=int, nargs="+", default=None)
+    parser.add_argument("--heldout-seeds", type=int, nargs="*", default=None)
+    parser.add_argument("--tuning-seeds", type=int, nargs="*", default=None)
     parser.add_argument("--duration-s", type=float, default=600.0)
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument(
@@ -112,6 +125,17 @@ def main(argv: list[str] | None = None) -> int:
         help="keep every replay (about 100 MB each); otherwise only their hashes",
     )
     args = parser.parse_args(argv)
+    if args.thresholds is None:
+        args.thresholds = ROOT / f"docs/contracts/{args.profile}.thresholds.json"
+    chosen = PROFILE_SEEDS.get(args.profile)
+    if chosen is None and None in (args.seeds, args.heldout_seeds, args.tuning_seeds):
+        parser.error(f"no seeds chosen for {args.profile}: give all three sets")
+    if args.seeds is None:
+        args.seeds = chosen["qualification"]
+    if args.heldout_seeds is None:
+        args.heldout_seeds = chosen["heldout"]
+    if args.tuning_seeds is None:
+        args.tuning_seeds = chosen["tuning"]
     binary = args.binary.resolve(strict=True)
     output = args.output.resolve()
     if output.exists():
