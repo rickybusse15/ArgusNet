@@ -2,33 +2,49 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from enum import Enum
+from functools import cache, partial
+from typing import Any
 
 import numpy as np
 
 from argusnet._native_world import NativeHandle, call
 
-_DEFAULTS = call("limits", profile="tracker")
+
+@cache
+def _defaults() -> dict[str, Any]:
+    """Rust's limits, asked for when some are made: importing needs no library."""
+    limits: dict[str, Any] = call("limits", profile="tracker")
+    return limits
+
+
+def _default(name: str) -> float:
+    value: float = _defaults()[name]
+    return value
+
+
+def _limit(name: str) -> Any:
+    return field(default_factory=partial(_default, name))
 
 
 @dataclass(frozen=True)
 class DronePhysicalLimits:
     """Physical envelope for a drone platform."""
 
-    max_speed_mps: float = _DEFAULTS["max_speed_mps"]
-    min_speed_mps: float = _DEFAULTS["min_speed_mps"]
-    max_bank_angle_rad: float = _DEFAULTS["max_bank_angle_rad"]
-    max_yaw_rate_rad_s: float = _DEFAULTS["max_yaw_rate_rad_s"]
-    max_climb_rate_mps: float = _DEFAULTS["max_climb_rate_mps"]
-    max_descent_rate_mps: float = _DEFAULTS["max_descent_rate_mps"]
-    max_horizontal_accel_mps2: float = _DEFAULTS["max_horizontal_accel_mps2"]
-    max_vertical_accel_mps2: float = _DEFAULTS["max_vertical_accel_mps2"]
-    min_agl_m: float = _DEFAULTS["min_agl_m"]
-    max_agl_m: float = _DEFAULTS["max_agl_m"]
-    min_energy_reserve_fraction: float = _DEFAULTS["min_energy_reserve_fraction"]
-    min_drone_separation_m: float = _DEFAULTS["min_drone_separation_m"]
-    min_drone_vertical_separation_m: float = _DEFAULTS["min_drone_vertical_separation_m"]
+    max_speed_mps: float = _limit("max_speed_mps")
+    min_speed_mps: float = _limit("min_speed_mps")
+    max_bank_angle_rad: float = _limit("max_bank_angle_rad")
+    max_yaw_rate_rad_s: float = _limit("max_yaw_rate_rad_s")
+    max_climb_rate_mps: float = _limit("max_climb_rate_mps")
+    max_descent_rate_mps: float = _limit("max_descent_rate_mps")
+    max_horizontal_accel_mps2: float = _limit("max_horizontal_accel_mps2")
+    max_vertical_accel_mps2: float = _limit("max_vertical_accel_mps2")
+    min_agl_m: float = _limit("min_agl_m")
+    max_agl_m: float = _limit("max_agl_m")
+    min_energy_reserve_fraction: float = _limit("min_energy_reserve_fraction")
+    min_drone_separation_m: float = _limit("min_drone_separation_m")
+    min_drone_vertical_separation_m: float = _limit("min_drone_vertical_separation_m")
 
     @classmethod
     def interceptor_default(cls) -> DronePhysicalLimits:

@@ -35,6 +35,19 @@ impl Column {
                 .closed_m
                 .is_some_and(|[low, high]| z_m > low + 1e-9 && z_m < high - 1e-9)
     }
+
+    /// Whether going from one height to the other here passes through what is
+    /// closed, whole.
+    fn crosses(&self, a_m: f64, b_m: f64) -> bool {
+        self.closed_m
+            .is_some_and(|[low, high]| a_m.min(b_m) <= low + 1e-9 && a_m.max(b_m) >= high - 1e-9)
+    }
+
+    /// Whether any height between the two is closed here.
+    fn closes(&self, a_m: f64, b_m: f64) -> bool {
+        self.closed_m
+            .is_some_and(|[low, high]| a_m.min(b_m) < high - 1e-9 && a_m.max(b_m) > low + 1e-9)
+    }
 }
 
 /// What is known of the air over a place.
@@ -225,16 +238,62 @@ impl<A: Airspace> Search<'_, A> {
         column
     }
 
-    /// Whether a straight leg is open all along.
+    /// Whether a straight leg is open all along: in plan every quarter cell, in
+    /// height every half layer, and at no height between two samples closed over
+    /// either.
     fn open(&mut self, from: [f64; 3], to: [f64; 3]) -> bool {
-        let length = (to[0] - from[0]).hypot(to[1] - from[1]);
-        let steps = (length / (0.25 * self.config.cell_m)).ceil().max(1.0) as usize;
+        let steps = self.samples(from, to, 0.25 * self.config.cell_m);
+        let mut last: Option<(f64, Column)> = None;
         (0..=steps).all(|k| {
             let f = k as f64 / steps as f64;
             let at: [f64; 3] = std::array::from_fn(|a| from[a] + f * (to[a] - from[a]));
             let i = ((at[0] - self.start[0]) / self.config.cell_m).round() as i32;
             let j = ((at[1] - self.start[1]) / self.config.cell_m).round() as i32;
-            self.column(i, j).is_some_and(|column| column.allows(at[2]))
+            let Some(column) = self.column(i, j) else {
+                return false;
+            };
+            let open = column.allows(at[2])
+                && last.is_none_or(|(z_m, before)| {
+                    !column.closes(z_m, at[2]) && !before.closes(z_m, at[2])
+                });
+            last = Some((at[2], column));
+            open
+        })
+    }
+
+    /// How many samples a leg takes, no further apart than `plan_m` in plan or
+    /// half a layer in height.
+    fn samples(&self, from: [f64; 3], to: [f64; 3], plan_m: f64) -> usize {
+        let length = (to[0] - from[0]).hypot(to[1] - from[1]);
+        let rise = (to[2] - from[2]).abs();
+        (length / plan_m)
+            .max(rise / (0.5 * self.config.layer_m))
+            .ceil()
+            .max(1.0) as usize
+    }
+
+    /// Whether the straight flight is steep enough to pass from one side of a
+    /// wire to the other over one place.
+    fn drops_through_a_wire(&self) -> bool {
+        let (from, to) = (self.start, self.goal);
+        let steps = self.samples(from, to, 0.5 * self.config.cell_m);
+        let raised = |k: usize| {
+            let f = k as f64 / steps as f64;
+            let at: [f64; 3] = std::array::from_fn(|a| from[a] + f * (to[a] - from[a]));
+            let column = self.air.column([at[0], at[1]], 0.0);
+            let z_m = match column {
+                Some(column) if !column.allows(at[2]) => {
+                    column.closed_m.map_or(at[2], |[_, high]| at[2].max(high))
+                }
+                _ => at[2],
+            };
+            (z_m, column)
+        };
+        (1..=steps).any(|k| {
+            let ((a_m, before), (b_m, here)) = (raised(k - 1), raised(k));
+            [before, here]
+                .iter()
+                .all(|column| column.is_some_and(|column| column.crosses(a_m, b_m)))
         })
     }
 
@@ -244,6 +303,10 @@ impl<A: Airspace> Search<'_, A> {
     fn direct_wh(&self, battery: &BatteryModel) -> (f64, bool) {
         let (from, to) = (self.start, self.goal);
         let length = (to[0] - from[0]).hypot(to[1] - from[1]);
+        // Down through a wire, over the one place, there is no climbing over it.
+        if self.drops_through_a_wire() {
+            return (f64::INFINITY, true);
+        }
         let step_m = 0.5 * self.config.cell_m;
         let steps = (length / step_m).ceil().max(1.0) as usize;
         let mut wire = false;
@@ -281,6 +344,12 @@ impl<A: Airspace> Search<'_, A> {
         (to[2] - from[2]).abs() <= self.config.max_gradient * length + 1e-9
     }
 }
+
+/// How near its end, in plan, a route is over it, metres.
+const OVER_END_M: f64 = 1.0;
+
+/// How many layers higher than the corners about it it may come in over it.
+const OVER_END_LAYERS: u32 = 12;
 
 /// A place in the search: steps east, north and up from the start.
 type Node = (i32, i32, i32);
@@ -469,6 +538,41 @@ pub fn plan(
         pulled.push(points[to]);
         at = to;
     }
+    // Over its end before it comes down. Corners about the end would have it pass
+    // the end by, or go round it, and be taken to be there: they are for the way
+    // down, and an aircraft that hovers comes down over its end, where it has to
+    // whatever is beside it. A wire's own clearance there is the governor's.
+    let end = pulled[pulled.len() - 1];
+    let about = |p: &[f64; 3]| (p[0] - end[0]).hypot(p[1] - end[1]) <= config.free_radius_m;
+    let first = 1 + pulled[1..pulled.len() - 1]
+        .iter()
+        .rposition(|corner| !about(corner))
+        .map_or(0, |k| k + 1);
+    if first < pulled.len() - 1 {
+        let before = pulled[first - 1];
+        let lowest = pulled[first..pulled.len() - 1]
+            .iter()
+            .map(|corner| corner[2])
+            .fold(f64::INFINITY, f64::min);
+        let way = (before[0] - end[0]).hypot(before[1] - end[1]);
+        // As low as they were, or the least higher that is open there.
+        let over = (0..=OVER_END_LAYERS)
+            .map(|layer| {
+                [
+                    end[0] + (before[0] - end[0]) * OVER_END_M / way,
+                    end[1] + (before[1] - end[1]) * OVER_END_M / way,
+                    lowest + f64::from(layer) * config.layer_m,
+                ]
+            })
+            .find(|over| {
+                way > 2.0 * OVER_END_M && search.gentle(before, *over) && search.open(before, *over)
+            });
+        if let Some(over) = over {
+            pulled.truncate(first);
+            pulled.push(over);
+            pulled.push(end);
+        }
+    }
     let length_m = pulled
         .windows(2)
         .map(|leg| (leg[1][0] - leg[0][0]).hypot(leg[1][1] - leg[0][1]))
@@ -651,6 +755,48 @@ mod tests {
         assert!(found.corners_m.iter().any(|c| c[2] >= 120.0), "{found:?}");
     }
 
+    /// Straight down, or steeply, through a wire: every sample is clear of it
+    /// and the way is not. Round it, to the far side and under.
+    #[test]
+    fn a_wire_is_not_stepped_over_by_a_steep_leg() {
+        let wire = world(vec![], vec![[-30.0, 30.0, -1000.0, 1000.0, 35.0, 65.0]]);
+        let config = Route3dConfig::default();
+        for (start, goal) in [
+            ([0.0, 0.0, 100.0], [0.0, 0.0, 10.0]),
+            ([0.0, 0.0, 10.0], [0.0, 0.0, 100.0]),
+            ([-2.0, 0.0, 100.0], [2.0, 1.0, 12.0]),
+            ([20.0, 0.0, 70.0], [0.0, 0.0, 30.0]),
+        ] {
+            match plan(&wire, &battery(), start, goal, &config) {
+                Plan3d::Route(route) => {
+                    assert!(route.meets_wire);
+                    let mut points = vec![start];
+                    points.extend(&route.corners_m);
+                    points.push(goal);
+                    for leg in points.windows(2) {
+                        for k in 0..=400 {
+                            let f = f64::from(k) / 400.0;
+                            let at: [f64; 3] =
+                                std::array::from_fn(|a| leg[0][a] + f * (leg[1][a] - leg[0][a]));
+                            let column = wire.column([at[0], at[1]], 0.0).unwrap();
+                            assert!(column.allows(at[2]), "{at:?} of {route:?}");
+                        }
+                    }
+                }
+                other => panic!("{start:?} to {goal:?}: {other:?}"),
+            }
+        }
+        // Clear of it, straight down is straight down.
+        let clear = plan(
+            &wire,
+            &battery(),
+            [200.0, 0.0, 100.0],
+            [200.0, 0.0, 10.0],
+            &config,
+        );
+        assert_eq!(clear, Plan3d::Straight);
+    }
+
     #[test]
     fn it_costs_what_it_says_and_no_more_than_the_ways_there_are() {
         let tower = world(vec![[-15.0, 15.0, -15.0, 15.0, 60.0]], vec![]);
@@ -706,6 +852,45 @@ mod tests {
             panic!("a route")
         };
         assert!(route.length_m < 365.0, "{route:?}");
+    }
+
+    /// Near its end it only comes nearer: one that passed by on the way to a last
+    /// corner was taken to be home, and then was not (West Pleasant View, seed
+    /// 158701: 13.9 m from its pad, then 15.5 m, 107 m over it; three more seeds
+    /// went round it).
+    #[test]
+    fn it_does_not_pass_its_end_by() {
+        // The pad beside a wire's band, the way in over it from the far side, and
+        // the search's grid laid where it was.
+        let air = world(vec![], vec![[-900.0, 900.0, 1.5, 75.0, 1.0, 58.0]]);
+        let goal = [0.0, 0.0, 0.0];
+        for start in [
+            [-33.7, 671.4, 156.9],
+            [-13.0, 671.4, 156.9],
+            [-33.7, 511.0, 156.9],
+            [25.0, 671.4, 140.0],
+        ] {
+            let Plan3d::Route(route) = plan(&air, &battery(), start, goal, &any()) else {
+                panic!("a route from {start:?}")
+            };
+            let mut points = vec![start];
+            points.extend(&route.corners_m);
+            points.push(goal);
+            let mut nearest = f64::INFINITY;
+            for leg in points.windows(2) {
+                for s in 0..=400 {
+                    let f = f64::from(s) / 400.0;
+                    let x = leg[0][0] + f * (leg[1][0] - leg[0][0]);
+                    let y = leg[0][1] + f * (leg[1][1] - leg[0][1]);
+                    let away = (x - goal[0]).hypot(y - goal[1]);
+                    assert!(
+                        nearest > 15.0 || away <= nearest + 1e-6,
+                        "{away} m from it, after {nearest}: {route:?}"
+                    );
+                    nearest = nearest.min(away);
+                }
+            }
+        }
     }
 
     #[test]

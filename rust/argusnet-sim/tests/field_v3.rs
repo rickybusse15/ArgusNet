@@ -231,6 +231,34 @@ fn a_drone_lost_for_long_goes_home_for_good() {
     assert_eq!(contacts(&frames), 0);
 }
 
+/// Without a fix from the first, it never sets out, and is sent home when that
+/// lasts: before, with no position at all, it was not lost.
+#[test]
+fn a_drone_that_never_had_a_fix_does_not_set_out() {
+    let options = whole_mission(Some((0.0, 1.0e6)), soon_lost(15.0));
+    let mut run = run_with(&options);
+    let sent = (0..bundle().steps).find(|_| {
+        run.step().unwrap();
+        let driver = run
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+            .expect("a mission driver");
+        driver.homeward_faults().get(DRONE) == Some(&SensorLost::Position)
+    });
+    assert!(
+        sent.is_some_and(|tick| (14..=18).contains(&tick)),
+        "{sent:?}"
+    );
+    let (_, frames) = replay(&options);
+    let home = position(&frames[0]);
+    for frame in &frames {
+        let at = position(frame);
+        let away = (at[0] - home[0]).hypot(at[1] - home[1]);
+        assert!(away < 5.0, "{away} m from its pad");
+    }
+    assert_eq!(contacts(&frames), 0);
+}
+
 #[test]
 fn a_held_run_resumes_exactly() {
     let options = whole_mission(Some((20.0, 60.0)), soon_lost(30.0));
