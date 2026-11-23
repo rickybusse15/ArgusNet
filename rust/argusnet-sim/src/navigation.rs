@@ -182,11 +182,16 @@ struct FlownOffset {
 }
 
 impl FlownOffset {
-    fn at(&self, believed_m: [f64; 3]) -> [f64; 3] {
+    /// The share of its error it has there: none on its pad.
+    fn free(&self, believed_m: [f64; 3]) -> f64 {
         let out = (believed_m[0] - self.pad_m[0]).hypot(believed_m[1] - self.pad_m[1]);
-        let free = ((out - PAD_HELD_M) / (PAD_FREE_M - PAD_HELD_M))
+        ((out - PAD_HELD_M) / (PAD_FREE_M - PAD_HELD_M))
             .max((believed_m[2] - self.pad_m[2]) / PAD_FREE_HEIGHT_M)
-            .clamp(0.0, 1.0);
+            .clamp(0.0, 1.0)
+    }
+
+    fn at(&self, believed_m: [f64; 3]) -> [f64; 3] {
+        let free = self.free(believed_m);
         self.offset_m.map(|v| v * free)
     }
 }
@@ -199,6 +204,34 @@ impl FlownPositions {
             .get(node_id)
             .map_or([0.0; 3], |flown| flown.offset.at(believed_m));
         std::array::from_fn(|k| believed_m[k] + offset[k])
+    }
+
+    /// Where `node_id` believes it is when it is at `true_m`: a position whose
+    /// [`Self::truth`] that is. Its error shrinks toward its pad, so it is not
+    /// the error where it was: there is a share of it, from none to all, that
+    /// is the share at the position it leads to, and it is found by halving.
+    pub fn believed(&self, node_id: &str, true_m: [f64; 3]) -> [f64; 3] {
+        let offsets = self.0.read().expect("offsets lock");
+        let Some(flown) = offsets.get(node_id) else {
+            return true_m;
+        };
+        let at = |share: f64| -> [f64; 3] {
+            std::array::from_fn(|k| true_m[k] - share * flown.offset.offset_m[k])
+        };
+        let (mut low, mut high) = (0.0, 1.0);
+        for _ in 0..80 {
+            let middle = 0.5 * (low + high);
+            if flown.offset.free(at(middle)) >= middle {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        // All of it away from the pad, exactly.
+        if flown.offset.free(at(1.0)) >= 1.0 {
+            return at(1.0);
+        }
+        at(low)
     }
 
     /// How much further than usual, `[horizontal, vertical]` metres,
@@ -227,15 +260,13 @@ impl FlownPositions {
 
     #[cfg(test)]
     pub(crate) fn always_off(node_id: &str, offset_m: [f64; 3]) -> Self {
+        Self::off_from_pad(node_id, offset_m, [1.0e9, 1.0e9, 0.0])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn off_from_pad(node_id: &str, offset_m: [f64; 3], pad_m: [f64; 3]) -> Self {
         let positions = Self::default();
-        positions.set(
-            node_id,
-            FlownOffset {
-                offset_m,
-                pad_m: [1.0e9, 1.0e9, 0.0],
-            },
-            [0.0; 2],
-        );
+        positions.set(node_id, FlownOffset { offset_m, pad_m }, [0.0; 2]);
         positions
     }
 
