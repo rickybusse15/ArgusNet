@@ -316,6 +316,12 @@ struct SimArgs {
     /// default. Implies `--view-planning`.
     #[arg(long)]
     view_planning_profile: Option<PathBuf>,
+    /// Send a drone home when its navigation camera or mapping payload stays
+    /// out (F2), over the believed surface and slowly with no camera. Needs
+    /// `--belief-flights` and a policy that sends drones home on their own
+    /// (`efficient_v1`, `contingency_v1`).
+    #[arg(long)]
+    fault_return: bool,
     /// Write what the map was asked for against what it achieved to this
     /// JSON file when the run ends: the predicted pass, what the cells hold,
     /// the map's claimed error against its true one, and what was missed and
@@ -638,6 +644,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             (pointing.is_some(), "--pointing"),
             (view_planning.is_some(), "--view-planning"),
             (imaging.is_some(), "--imaging"),
+            (args.fault_return, "--fault-return"),
             (args.belief_flights, "--belief-flights"),
             (
                 args.scan_coverage_threshold.is_some(),
@@ -751,6 +758,9 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                     .then(argusnet_sim::belief_world::WirePlanningConfig::default),
                 view_planning: view_planning.clone(),
                 imaging: imaging.clone(),
+                fault_return: args
+                    .fault_return
+                    .then(argusnet_sim::belief_world::FaultReturnConfig::default),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -1008,6 +1018,12 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--view-planning points a rig's pod by a quality requirement: it needs \
              --rig-profile and --quality-requirements, and replaces --pointing",
+        );
+    }
+    if args.fault_return && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {
+        return fail(
+            EXIT_INVALID,
+            "--fault-return flies home over a self-built map: it needs --world-knowledge none",
         );
     }
     if args.map_report.is_some() && args.quality_requirements.is_none() && args.profile.is_none() {

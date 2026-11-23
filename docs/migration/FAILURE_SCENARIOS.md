@@ -207,5 +207,48 @@ Case H (`a_jammed_gimbal_maps_by_fixed_pointing_or_not_at_all`,
 - refused before the run without a declared rig.
 
 Still not covered: a degraded (rather than lost) camera envelope per
-platform, a jam during a sweep (a policy `field_v1` does not use), and
-return home as a fault response.
+platform, and a jam during a sweep (a policy `field_v1` does not use).
+
+## Sixth slice: a lost sensor sends its drone home (2026-11-22)
+
+Before this, a navigation camera that never came back held its drone where it
+stopped until the run ended, and the mission with it. `--fault-return` (and
+`field_v2`) gives the two outages an end. It needs mission flights over the
+believed surface and a policy that sends drones home on their own.
+
+| Lost | For | Then |
+| --- | --- | --- |
+| Navigation camera | 10 s | Home at 6 m/s or less, over what the map believes |
+| Mapping payload | 60 s | Home at its own speed; its camera still sees |
+
+- The drone brakes and holds first, as before. A sensor back sooner than that
+  changes nothing.
+- It goes home the way a drone at its reserve does: it gives up any POI it
+  holds (`fault_handoff`, `fault_teammate`) and takes nothing again, even if
+  the sensor comes back. The decision is `return_home`, with
+  `nav_camera_lost` or `mapping_payload_lost`.
+- The mission's own recall is flown at the blind speed too, so a drone with no
+  camera no longer holds the mission open at the end.
+- A drone knows how long its own sensor has been out. Nothing else of the fault
+  manifest reaches the mission.
+
+Flying home with no forward camera relies on the map: measured ground, believed
+structures and the stand-in for unseen ground, at the usual clearance, with the
+physical guard behind it. Something unmapped and taller than the stand-in on
+the way would not be seen. Holding until the battery ran out was judged worse.
+
+Case I (`tests/fault_return.rs`), declared before the run, and held: no world
+contact; braking as declared, then never over the blind speed; home and staying
+there; the mission complete with every POI done; short outages identical to the
+run without the option; resume on the way home and reset exact.
+
+West Pleasant View, `field_v2`, 16 runs (seeds 7 and 4451, each of the two
+drones, each sensor, lost for good at 60 or 200 s): the faulted drone is home at
+the end of every one, with no world contact and no step over 9.4 m. Under
+`field_v1` the one case run (seed 7, camera lost at 60 s) ends with the drone
+still holding 945 m from home. With two drones, the one left usually cannot
+finish the scan in 600 s: 2 of the 16 missions complete. The response saves the
+drone, not the schedule.
+
+Not covered: a fault return when every drone has gone home mid-scan (the
+mission stays scanning), and a jammed gimbal, which keeps its fixed pointing.

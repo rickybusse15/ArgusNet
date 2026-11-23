@@ -2190,6 +2190,10 @@ impl AssembledRun {
         controllers.set_physical_guard(guard.clone());
         controllers.set_explorers_rejoin(rejoin_explorers);
         self.predicted_pass = predicted_pass;
+        let blind_speed_mps = config
+            .fault_return
+            .as_ref()
+            .map(|fault_return| fault_return.blind_speed_mps);
         let wire_planning = wire_planning_config;
         let governed_map = handle.clone();
 
@@ -2207,6 +2211,14 @@ impl AssembledRun {
                 driver.cap_redirect_speed(cap);
             }
             driver.stay_home_when_complete(mission_flights.is_some());
+            if config.fault_return.is_some() && !driver.policy().is_efficient() {
+                return Err(
+                    "a fault return needs a planning policy that sends drones home on their \
+                     own: efficient_v1 or contingency_v1"
+                        .into(),
+                );
+            }
+            driver.set_fault_return(config.fault_return.clone());
             if let Some(flights) = &mission_flights {
                 // Each POI's height over the ground: declared by the
                 // scenario, else recovered from its absolute height and the
@@ -2320,6 +2332,7 @@ impl AssembledRun {
                         governed_map,
                     )
                     .with_hold_braking(camera_braking_mps2)
+                    .with_blind_speed(blind_speed_mps)
                 }),
             );
         }
@@ -2440,6 +2453,21 @@ impl AssembledRun {
             .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
         {
             overrides.set_camera_out(camera_out.clone());
+        }
+        let seconds = |out: BTreeMap<String, u64>| -> BTreeMap<String, f64> {
+            out.into_iter()
+                .map(|(node, ticks)| (node, ticks as f64 * self.dt_s))
+                .collect()
+        };
+        let sensors_out = crate::mission_driver::SensorsOut {
+            nav_camera: seconds(schedule.camera_out_for(tick)),
+            mapping_payload: seconds(schedule.mapping_out_for(tick)),
+        };
+        if let Some(driver) = self
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+        {
+            driver.set_sensors_out(sensors_out);
         }
         let observe = self
             .sim

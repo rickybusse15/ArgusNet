@@ -2,6 +2,11 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Return home on a lost sensor (F2). With `--fault-return`, a drone whose
+  navigation camera stays out for 10 s, or mapping payload for 60 s, flies home
+  over the believed surface, at 6 m/s with no camera. Before, a camera that
+  never came back held its drone, and the mission, until the run ended. On in
+  `field_v2`; nothing else changes. See `docs/migration/FAILURE_SCENARIOS.md`.
 - Map report. `argusnet-rs sim --map-report FILE` writes what the map was asked
   for against what it achieved: the predicted pass, what cells hold, the map's
   claimed error against its true one, and what was missed and why. `field_v2`

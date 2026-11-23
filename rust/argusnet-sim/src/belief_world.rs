@@ -134,6 +134,11 @@ pub struct ExplorationConfig {
     /// fix. Needs a rig and a quality requirement; cruise only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_planning: Option<argusnet_planning::views::ViewPlanningConfig>,
+    /// Send a drone home when a sensor it needs stays out (F2). Needs
+    /// mission flights, and a planning policy that sends drones home on
+    /// their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fault_return: Option<FaultReturnConfig>,
     /// Write the map's report ([`crate::map_report`]) into the replay's
     /// `meta.map_report` when the run ends. Needs a quality requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -173,6 +178,45 @@ pub struct ExplorationConfig {
     /// physical guard stops.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission_flights: Option<MissionFlightConfig>,
+}
+
+/// When a lost sensor sends a drone home, for good (F2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaultReturnConfig {
+    /// How long a drone whose navigation camera is out holds before it goes
+    /// home, seconds: a camera back sooner goes on with the mission.
+    pub camera_hold_s: f64,
+    /// How long a mapping payload may return nothing before its drone goes
+    /// home, seconds.
+    pub payload_out_s: f64,
+    /// How fast a drone with no navigation camera flies home over the
+    /// believed surface, m/s.
+    pub blind_speed_mps: f64,
+}
+
+impl Default for FaultReturnConfig {
+    fn default() -> Self {
+        Self {
+            camera_hold_s: 10.0,
+            payload_out_s: 60.0,
+            blind_speed_mps: 6.0,
+        }
+    }
+}
+
+impl FaultReturnConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value, least) in [
+            ("camera_hold_s", self.camera_hold_s, 0.0),
+            ("payload_out_s", self.payload_out_s, 0.0),
+            ("blind_speed_mps", self.blind_speed_mps, f64::MIN_POSITIVE),
+        ] {
+            if !(value.is_finite() && value >= least) {
+                return Err(format!("fault return {name} cannot be {value}"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// How mission flights keep above the believed surface.
@@ -384,6 +428,7 @@ impl Default for ExplorationConfig {
             view_planning: None,
             imaging: None,
             map_report: false,
+            fault_return: None,
         }
     }
 }
@@ -474,6 +519,16 @@ impl ExplorationConfig {
                 return Err("view planning chooses the pointing; do not set one as well".into());
             }
             planning.validate()?;
+        }
+        if let Some(fault_return) = &self.fault_return {
+            if self.mission_flights.is_none() {
+                return Err(
+                    "a fault return flies home over the believed surface: it needs \
+                     mission flights"
+                        .into(),
+                );
+            }
+            fault_return.validate()?;
         }
         if self.map_report && self.quality.is_none() {
             return Err("a map report needs a quality requirement to report on".into());

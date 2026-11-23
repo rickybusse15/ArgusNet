@@ -61,6 +61,7 @@ fn the_profile_is_field_v1_and_what_it_adds() {
     exploration.view_planning = None;
     exploration.imaging = None;
     exploration.map_report = false;
+    exploration.fault_return = None;
     exploration.quality.as_mut().unwrap().max_image_gsd_m = None;
     assert_eq!(stripped, v1);
 

@@ -244,6 +244,10 @@ struct DriverCheckpoint {
     /// every other checkpoint is unchanged.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     homeward: BTreeSet<String>,
+    /// Those of them sent home by a lost sensor (F2), and which. Absent when
+    /// none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    homeward_faults: BTreeMap<String, SensorLost>,
     /// Drones sweeping holes (P4). Absent when none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     gap_fill: BTreeMap<String, GapFill>,
@@ -303,11 +307,29 @@ fn fitted_shape(wires: &[PowerLine]) -> u64 {
     hash
 }
 
+/// The sensor whose loss sent a drone home (F2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SensorLost {
+    NavCamera,
+    MappingPayload,
+}
+
+/// What each drone reports of its own sensors: how long each has been out,
+/// seconds. Set before every tick, like the faults themselves.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SensorsOut {
+    pub nav_camera: BTreeMap<String, f64>,
+    pub mapping_payload: BTreeMap<String, f64>,
+}
+
 /// Why a drone gives up the POI it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GiveUp {
     /// At its reserve home, and heading there.
     Reserve,
+    /// Heading home with a sensor lost (F2).
+    Fault,
     /// Below the fixed handoff fraction (efficient_v1).
     Low,
     /// It can no longer afford the dwell left and the trip home (F5).
@@ -390,6 +412,12 @@ pub struct MissionDriverStage {
     /// Drones sent home on their own reserve under efficient_v1 (P2): they
     /// hold no POI and take none again.
     homeward: BTreeSet<String>,
+    /// Those sent home by a lost sensor (F2), and which.
+    homeward_faults: BTreeMap<String, SensorLost>,
+    /// When a lost sensor sends a drone home; `None` never does.
+    fault_return: Option<crate::belief_world::FaultReturnConfig>,
+    /// What the drones report of their sensors.
+    sensors_out: SensorsOut,
     /// Drones sweeping a hole in the coverage map under efficient_v1 (P4),
     /// with the cells they sweep.
     gap_fill: BTreeMap<String, GapFill>,
@@ -1179,6 +1207,9 @@ impl MissionDriverStage {
             homes,
             redirected: BTreeMap::new(),
             homeward: BTreeSet::new(),
+            homeward_faults: BTreeMap::new(),
+            fault_return: None,
+            sensors_out: SensorsOut::default(),
             gap_fill: BTreeMap::new(),
             rescored: false,
             coordinator: None,
@@ -2362,6 +2393,82 @@ impl MissionDriverStage {
         }
     }
 
+    /// Send a drone home when a sensor it needs stays out, if a loss that
+    /// long does (F2). It gives up any POI it holds, as a drone at its
+    /// reserve does, and takes nothing again: a fault that long ends its
+    /// mission even if the sensor comes back.
+    fn send_faulted_drones_home(&mut self, mobile: &[(String, [f64; 3])], timestamp_s: f64) {
+        let Some(config) = self.fault_return.clone() else {
+            return;
+        };
+        for (id, position) in mobile {
+            if self.homeward.contains(id) {
+                continue;
+            }
+            let Some(home) = self.homes.get(id).copied() else {
+                continue;
+            };
+            let long = |out: &BTreeMap<String, f64>, limit_s: f64| {
+                out.get(id)
+                    .copied()
+                    .filter(|&for_s| for_s + 1e-9 >= limit_s)
+            };
+            // The camera first: it is the one that keeps the drone off things.
+            let lost = long(&self.sensors_out.nav_camera, config.camera_hold_s)
+                .map(|for_s| (SensorLost::NavCamera, for_s))
+                .or_else(|| {
+                    long(&self.sensors_out.mapping_payload, config.payload_out_s)
+                        .map(|for_s| (SensorLost::MappingPayload, for_s))
+                });
+            let Some((lost, for_s)) = lost else {
+                continue;
+            };
+            self.homeward.insert(id.clone());
+            self.homeward_faults.insert(id.clone(), lost);
+            let flight = self.flight(*position, home, timestamp_s);
+            let mut inputs = serde_json::json!({
+                "sensor": lost,
+                "out_for_s": for_s,
+                "position_m": position,
+                "poi": self.pois.assignment_for(id),
+            });
+            flight.record(&mut inputs);
+            self.override_commands
+                .push(OverrideCommand::SetEgress(id.clone(), flight.trajectory));
+            let (reason, sensor) = match lost {
+                SensorLost::NavCamera => ("nav_camera_lost", "navigation camera"),
+                SensorLost::MappingPayload => ("mapping_payload_lost", "mapping payload"),
+            };
+            self.decisions.push(Decision {
+                kind: "return_home",
+                status: DecisionStatus::QueuedForNextTick,
+                subject: Some(id.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason,
+                detail: format!("{id} has had no {sensor} for {for_s:.1} s: routed home"),
+                inputs,
+                command: Some("set_egress"),
+            });
+        }
+    }
+
+    /// Send drones home when a sensor they need stays out (F2). Before the
+    /// first tick.
+    pub fn set_fault_return(&mut self, config: Option<crate::belief_world::FaultReturnConfig>) {
+        self.fault_return = config;
+    }
+
+    /// What the drones report of their sensors from now on (F2).
+    pub fn set_sensors_out(&mut self, out: SensorsOut) {
+        self.sensors_out = out;
+    }
+
+    /// The drones sent home by a lost sensor, and which (F2).
+    pub fn homeward_faults(&self) -> &BTreeMap<String, SensorLost> {
+        &self.homeward_faults
+    }
+
     /// Fly every drone sent home on its own reserve home again, from where
     /// it is, after the mission's egress drops every recall at once.
     fn keep_reserve_returns(&mut self, mobile: &[(String, [f64; 3])], at_s: f64) {
@@ -2385,8 +2492,13 @@ impl MissionDriverStage {
                 candidates: Vec::new(),
                 reason: "reserve_return_kept",
                 detail: format!(
-                    "the mission's recall ended, but {id} went home on its own reserve: it \
-                     stays on its way home"
+                    "the mission's recall ended, but {id} went home on its own {}: it \
+                     stays on its way home",
+                    match self.homeward_faults.get(id) {
+                        Some(SensorLost::NavCamera) => "with no navigation camera",
+                        Some(SensorLost::MappingPayload) => "with no mapping payload",
+                        None => "reserve",
+                    }
                 ),
                 inputs,
                 command: Some("set_egress"),
@@ -2423,6 +2535,7 @@ impl MissionDriverStage {
         // A drone at its reserve is already homeward; say so, rather than
         // that its battery is low, whatever its fraction.
         let homeward = self.homeward.clone();
+        let faults = self.homeward_faults.clone();
         let giving_up = |id: &str| {
             homeward.contains(id)
                 || if contingency {
@@ -2432,7 +2545,12 @@ impl MissionDriverStage {
                 }
         };
         let why = |id: &str| -> (GiveUp, String) {
-            if homeward.contains(id) {
+            if faults.contains_key(id) {
+                (
+                    GiveUp::Fault,
+                    format!("{id} lost a sensor and is heading home"),
+                )
+            } else if homeward.contains(id) {
                 (
                     GiveUp::Reserve,
                     format!("{id} at its reserve and heading home"),
@@ -2473,6 +2591,7 @@ impl MissionDriverStage {
                 candidates: Vec::new(),
                 reason: match given_up {
                     GiveUp::Reserve => "reserve_teammate",
+                    GiveUp::Fault => "fault_teammate",
                     GiveUp::Low => "low_battery_teammate",
                     GiveUp::CannotFinish => "cannot_finish_teammate",
                 },
@@ -2576,6 +2695,7 @@ impl MissionDriverStage {
                         candidates: candidates.clone(),
                         reason: match given_up {
                             GiveUp::Reserve => "reserve_handoff",
+                            GiveUp::Fault => "fault_handoff",
                             GiveUp::Low => "safe_handoff",
                             GiveUp::CannotFinish => "cannot_finish_handoff",
                         },
@@ -3590,6 +3710,10 @@ impl StageHandler for MissionDriverStage {
         }
         if self.policy.is_efficient() {
             self.send_low_drones_home(&mobile, battery, timestamp_s);
+            // Not once the mission has recalled everyone.
+            if !matches!(phase, MissionPhase::Egress | MissionPhase::Complete) {
+                self.send_faulted_drones_home(&mobile, timestamp_s);
+            }
         }
         if phase == MissionPhase::Inspecting {
             // Dwell is credited per boundary: the boundaries this lane sat
@@ -3832,6 +3956,7 @@ impl StageHandler for MissionDriverStage {
             coordinator: self.coordinator.clone(),
             policy: self.policy,
             homeward: self.homeward.clone(),
+            homeward_faults: self.homeward_faults.clone(),
             gap_fill: self.gap_fill.clone(),
             mapped_wires: self.mapped_wires,
             mapped_fit: self.mapped_fit,
@@ -3876,6 +4001,7 @@ impl StageHandler for MissionDriverStage {
         self.rescored = decoded.rescored;
         self.coordinator = decoded.coordinator;
         self.homeward = decoded.homeward;
+        self.homeward_faults = decoded.homeward_faults;
         self.gap_fill = decoded.gap_fill;
         self.mapped_wires = decoded.mapped_wires;
         self.mapped_fit = decoded.mapped_fit;
@@ -3924,6 +4050,7 @@ impl StageHandler for MissionDriverStage {
         self.rescored = false;
         self.coordinator = None;
         self.homeward.clear();
+        self.homeward_faults.clear();
         self.gap_fill.clear();
         if self.mapped_layer {
             self.obstacles = None;
