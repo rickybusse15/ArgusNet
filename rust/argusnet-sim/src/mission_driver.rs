@@ -3722,6 +3722,11 @@ impl MissionDriverStage {
 
     /// The share of the map the scan must reach before it ends, in place
     /// of the scenario's. Before the first tick.
+    /// How near its station a drone is home.
+    pub fn egress_arrival_radius_m(&self) -> f64 {
+        self.machine.config().egress_arrival_radius_m
+    }
+
     pub fn scan_coverage_threshold(&self) -> f64 {
         self.machine.config().scan_coverage_threshold
     }

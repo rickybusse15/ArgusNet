@@ -6,6 +6,10 @@
 //! and points are, and the run's length. Whether a point is hidden, what the ground
 //! does and where wires hang is for the mission to find out, so a plan that checks out
 //! is not one that will succeed. One that does not is refused with the limit it meets.
+//!
+//! A refusal has to be right, so what it compares is the least there is: a drone goes
+//! from one point to the next without its pad between, a dwell is shared by all the
+//! fleet, and a drone is at a point, or home, within the radius that counts as it.
 
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +61,8 @@ pub struct PlannedPoint {
     pub energy_wh: Option<f64>,
     /// What that drone would have left over its reserve.
     pub margin_wh: Option<f64>,
+    /// Whether it can be done by one drone, there and back. A fleet sharing the
+    /// dwell may do what this says one cannot.
     pub feasible: bool,
 }
 
@@ -120,11 +126,17 @@ pub struct PlanInput<'a> {
     /// Each point: id, place, dwell, priority.
     pub points: Vec<(String, [f64; 3], f64, i64)>,
     pub redirect_speed_mps: f64,
+    /// How near its station a drone is home.
+    pub home_radius_m: f64,
     pub requirement: Option<QualityRequirement>,
     pub gate_fraction: f64,
     pub pass: Option<PassPrediction>,
     pub finest_image_gsd_m: Option<f64>,
 }
+
+/// How near a point a drone's dwell counts, metres in plan
+/// (`PoiManager::accumulate_dwell`).
+const DWELL_RADIUS_M: f64 = 30.0;
 
 /// Past this share of a limit a plan is close to it.
 const CLOSE: f64 = 0.8;
@@ -234,37 +246,58 @@ pub fn build(input: PlanInput<'_>) -> MissionPlan {
             format!("off the map: {}", outside.join(", "))
         },
     );
-    let unreachable: Vec<&str> = points
-        .iter()
-        .filter(|p| !p.feasible)
-        .map(|p| p.poi_id.as_str())
-        .collect();
+    // The least any drone, with all of them sharing the dwell, must spend on a
+    // point: the way there and back, to within the radii that count.
+    let sharing = drones.len().max(1) as f64;
+    let plan_m = |a: &[f64; 3], b: &[f64; 3]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let beyond = |p: &PlannedPoint| {
+        drones.iter().all(|drone| {
+            let far = plan_m(&p.position_m, &drone.home_m);
+            let least = battery.travel_cost_wh((far - DWELL_RADIUS_M).max(0.0))
+                + battery.hover_power_w * p.dwell_s / sharing / 3600.0
+                + battery.travel_cost_wh((far - DWELL_RADIUS_M - input.home_radius_m).max(0.0));
+            least > drone.energy_wh - drone.reserve_wh
+        })
+    };
+    let named = |points: Vec<&PlannedPoint>| {
+        points
+            .iter()
+            .map(|p| p.poi_id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let unreachable: Vec<&PlannedPoint> = points.iter().filter(|p| beyond(p)).collect();
+    let shared: Vec<&PlannedPoint> = points.iter().filter(|p| !p.feasible).collect();
     let least_margin = points
         .iter()
         .filter_map(|p| p.margin_wh)
         .fold(f64::INFINITY, f64::min);
-    check(
-        "points_within_reach",
-        if !unreachable.is_empty() {
-            CheckStatus::Failed
-        } else if points.is_empty() {
-            CheckStatus::Unknown
-        } else if least_margin < (1.0 - CLOSE) * battery.capacity_wh {
-            CheckStatus::Warning
-        } else {
-            CheckStatus::Ok
-        },
-        if !unreachable.is_empty() {
+    let (status, detail) = if points.is_empty() {
+        (CheckStatus::Unknown, "no points".into())
+    } else if !unreachable.is_empty() {
+        (
+            CheckStatus::Failed,
             format!(
-                "no drone can go, dwell and come home with its reserve: {}",
-                unreachable.join(", ")
-            )
-        } else if points.is_empty() {
-            "no points".into()
-        } else {
-            format!("the least left over a reserve is {least_margin:.0} Wh")
-        },
-    );
+                "no drone can get there and home with its reserve: {}",
+                named(unreachable)
+            ),
+        )
+    } else if !shared.is_empty() {
+        (
+            CheckStatus::Warning,
+            format!("more than one drone can do alone: {}", named(shared)),
+        )
+    } else {
+        (
+            if least_margin < (1.0 - CLOSE) * battery.capacity_wh {
+                CheckStatus::Warning
+            } else {
+                CheckStatus::Ok
+            },
+            format!("the least left over a reserve is {least_margin:.0} Wh"),
+        )
+    };
+    check("points_within_reach", status, detail);
     match (&input.requirement, &scan) {
         (Some(requirement), Some(scan)) => {
             let sigma = requirement.max_vertical_sigma_m;
@@ -313,13 +346,27 @@ pub fn build(input: PlanInput<'_>) -> MissionPlan {
                     scan.pass.density_per_m2, scan.passes
                 ),
             );
-            let dwell: f64 = points.iter().map(|p| p.dwell_s).sum();
-            let transit: f64 = points
+            // After the scan: every dwell, shared by all, and the way home from
+            // whichever point leaves the longest once it is done. Where a drone
+            // is when the scan ends is not known: it may be at one.
+            let dwell_s: f64 = points.iter().map(|p| p.dwell_s).sum();
+            let after_s = points
                 .iter()
-                .filter_map(|p| p.out_m)
-                .map(|m| 2.0 * m / input.redirect_speed_mps.max(1e-9))
-                .sum();
-            let least = scan.least_s + (dwell + transit) / drones.len().max(1) as f64;
+                .map(|p| {
+                    let home = drones
+                        .iter()
+                        .map(|drone| plan_m(&p.position_m, &drone.home_m))
+                        .fold(f64::INFINITY, f64::min);
+                    let way_m = (home - DWELL_RADIUS_M - input.home_radius_m).max(0.0);
+                    let way_s = if way_m.is_finite() {
+                        way_m / input.redirect_speed_mps.max(1e-9)
+                    } else {
+                        0.0
+                    };
+                    p.dwell_s / sharing + way_s
+                })
+                .fold(dwell_s / sharing, f64::max);
+            let least = scan.least_s + after_s;
             check(
                 "time",
                 if least > input.duration_s {
@@ -334,23 +381,21 @@ pub fn build(input: PlanInput<'_>) -> MissionPlan {
                     input.duration_s
                 ),
             );
-            let room = drones
+            let needed = battery.travel_cost_wh(scan.track_m);
+            let room: f64 = drones
                 .iter()
-                .map(|d| d.energy_wh - d.reserve_wh)
-                .fold(f64::INFINITY, f64::min);
+                .map(|d| (d.energy_wh - d.reserve_wh).max(0.0))
+                .sum();
             check(
                 "scan_energy",
-                if scan.least_wh_per_drone > room {
+                if needed > room {
                     CheckStatus::Failed
-                } else if scan.least_wh_per_drone > CLOSE * room {
+                } else if needed > CLOSE * room {
                     CheckStatus::Warning
                 } else {
                     CheckStatus::Ok
                 },
-                format!(
-                    "at least {:.0} Wh a drone, {room:.0} Wh over its reserve",
-                    scan.least_wh_per_drone
-                ),
+                format!("at least {needed:.0} Wh, {room:.0} Wh over the fleet's reserves"),
             );
         }
         _ => check(
@@ -432,6 +477,7 @@ mod tests {
             ],
             points: vec![("p".into(), [100.0, 300.0, 40.0], 20.0, 1)],
             redirect_speed_mps: 20.0,
+            home_radius_m: 15.0,
             requirement: Some(requirement()),
             gate_fraction: 0.9,
             pass: Some(pass()),
@@ -492,6 +538,60 @@ mod tests {
                 drone.2 = 110.0;
             }
         });
+    }
+
+    /// Points near each other and far from any pad: a drone goes from one to the
+    /// next. The scan is 225 s, six dwells of 20 s shared by two are 60 s, and
+    /// the way home is 20 s or so. Six trips from the pads would have been 600 s.
+    #[test]
+    fn points_together_far_from_the_pads_are_not_a_trip_each() {
+        let cluster = |input: &mut PlanInput<'_>| {
+            input.drones[1].1 = [10.0, -400.0, 0.0];
+            input.points = (0..6)
+                .map(|k| {
+                    let at = [10.0 * f64::from(k), 480.0, 40.0];
+                    (format!("p{k}"), at, 20.0, 1)
+                })
+                .collect();
+        };
+        let mission = plan(|input| {
+            cluster(input);
+            input.duration_s = 400.0;
+        });
+        assert_eq!(status(&mission, "time"), CheckStatus::Ok);
+        // Shorter than the floor is still refused.
+        let mission = plan(|input| {
+            cluster(input);
+            input.duration_s = 270.0;
+        });
+        assert_eq!(status(&mission, "time"), CheckStatus::Failed);
+    }
+
+    /// A dwell too long for one drone's battery, and not for two sharing it.
+    #[test]
+    fn what_a_fleet_can_share_is_not_refused() {
+        // 5000 s of hovering is 417 Wh, over the 400 Wh a drone has to spend.
+        let mission = plan(|input| input.points[0].2 = 5000.0);
+        assert!(!mission.points[0].feasible);
+        assert_eq!(
+            status(&mission, "points_within_reach"),
+            CheckStatus::Warning
+        );
+        // Nor is a scan one of them has the energy for.
+        let mission = plan(|input| input.drones[0].2 = 100.0);
+        assert_eq!(status(&mission, "scan_energy"), CheckStatus::Ok);
+    }
+
+    /// Each floor is under what the same mission would take at its easiest.
+    #[test]
+    fn being_there_is_within_the_radius_that_counts() {
+        let mission = plan(|input| {
+            input.points[0].1 = [0.0, 355.0, 40.0];
+            input.points[0].2 = 0.0;
+            input.duration_s = 225.0 + 1e-6;
+        });
+        // 45 m from a pad, 30 m of it dwelt within and 15 m home within.
+        assert_eq!(status(&mission, "time"), CheckStatus::Warning);
     }
 
     #[test]

@@ -3290,6 +3290,7 @@ impl AssembledRun {
                 })
                 .collect(),
             redirect_speed_mps: driver.config().redirect_speed_mps,
+            home_radius_m: driver.egress_arrival_radius_m(),
             requirement: config.and_then(|config| config.quality.clone()),
             gate_fraction: driver.scan_coverage_threshold(),
             pass: self.predicted_pass.clone(),

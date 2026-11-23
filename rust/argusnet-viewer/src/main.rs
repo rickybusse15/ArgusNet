@@ -89,7 +89,8 @@ struct Args {
     run: Option<PathBuf>,
     #[arg(
         long,
-        help = "Show this mission plan (`argusnet-rs plan --output`) in the Plan workspace."
+        help = "Show this mission plan (`argusnet-rs plan --output`) in the Plan workspace. Needs \
+                --run, or --scene: the plan is shown beside a world."
     )]
     plan: Option<PathBuf>,
     #[command(flatten)]

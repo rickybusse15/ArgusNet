@@ -169,7 +169,8 @@ pub(super) fn plan_rail(ui: &mut egui::Ui, state: &PlanState) {
             ui.label("No mission plan is loaded.");
             ui.small(
                 "argusnet-rs plan --config SCENARIO --profile field_v3 --output plan.json, \
-                 then open the viewer with --plan plan.json. Writing a plan here waits for the \
+                 then open the viewer with --run SCENARIO --plan plan.json. Writing a plan here waits \
+                 for the \
                  canonical contracts (S1).",
             );
             return;
