@@ -146,6 +146,11 @@ pub struct ExplorationConfig {
     /// requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plane_heights: bool,
+    /// Route mission flights in three dimensions over the believed surface
+    /// and round the wires, by energy. Needs mission flights. Absent flies
+    /// them straight, or round mapped wires in plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_3d: Option<argusnet_planning::route3d::Route3dConfig>,
     /// Go on mapping what falls short once the points are inspected. Needs a
     /// quality requirement. Absent goes home at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -546,6 +551,7 @@ impl Default for ExplorationConfig {
             view_planning: None,
             imaging: None,
             plane_heights: false,
+            route_3d: None,
             follow_up: None,
             end_when_all_home: false,
             separation_surface: false,
@@ -664,6 +670,12 @@ impl ExplorationConfig {
                     );
                 }
             }
+        }
+        if let Some(route) = &self.route_3d {
+            if self.mission_flights.is_none() {
+                return Err("3D routes are mission flights': they need them".into());
+            }
+            route.validate()?;
         }
         if let Some(follow_up) = &self.follow_up {
             if self.quality.is_none() {
@@ -2883,6 +2895,15 @@ impl BeliefSnapshot {
         } else {
             self.stand_in_ij(i, j)
         }
+    }
+
+    /// Whether the map reaches here.
+    pub fn contains(&self, xy_m: [f64; 2]) -> bool {
+        let [x, y] = xy_m;
+        x >= self.x_min_m
+            && y >= self.y_min_m
+            && x <= self.x_min_m + self.nx as f64 * self.resolution_m
+            && y <= self.y_min_m + self.ny as f64 * self.resolution_m
     }
 
     /// Ground height to plan against at `(x, y)`: the belief where seen,

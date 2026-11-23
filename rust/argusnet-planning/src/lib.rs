@@ -9,6 +9,7 @@ pub mod frontier;
 pub mod planner;
 pub mod poi;
 pub mod route;
+pub mod route3d;
 pub mod views;
 
 pub use battery::{BatteryModel, BatteryState};

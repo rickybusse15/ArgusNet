@@ -258,6 +258,7 @@ impl RunOptions {
             fault_return.lost_position = Some(crate::belief_world::LostPositionConfig::default());
         }
         exploration.separation_surface = true;
+        exploration.route_3d = Some(argusnet_planning::route3d::Route3dConfig::default());
         exploration.follow_up = Some(crate::belief_world::FollowUpConfig::default());
         exploration.end_when_all_home = true;
         options.profile = Some(RunProfile::FieldV3);

@@ -394,7 +394,8 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - a drone that does not know where it is holds, and goes home if that lasts;
 - separation over the believed surface;
 - the fleet follows up on the map before it goes home, and a scan with every drone
-  home ends ([MAP_REPORT.md](MAP_REPORT.md)).
+  home ends ([MAP_REPORT.md](MAP_REPORT.md));
+- mission flights routed in three dimensions ([ROUTES_3D.md](ROUTES_3D.md)).
 
 Limits: [field_v3.thresholds.json](../contracts/field_v3.thresholds.json),
 `field_v2`'s unchanged and `position_within_2_sigma`. The tuning seeds pass every

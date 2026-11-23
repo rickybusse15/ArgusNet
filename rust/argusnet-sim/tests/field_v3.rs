@@ -133,6 +133,7 @@ fn the_profile_is_field_v2_and_what_it_adds() {
     exploration.fault_return.as_mut().unwrap().lost_position = None;
     exploration.separation_surface = false;
     exploration.follow_up = None;
+    exploration.route_3d = None;
     exploration.end_when_all_home = false;
     assert_eq!(stripped, v2);
 
@@ -386,4 +387,81 @@ fn a_scan_with_every_drone_home_ends() {
     options.exploration.as_mut().unwrap().end_when_all_home = false;
     let (_, open) = replay(&options);
     assert_eq!(phase(open.last().unwrap()), "scanning");
+}
+
+fn routed(scan_threshold: f64, routed: bool) -> RunOptions {
+    let mut options = whole_mission(None, None);
+    options.scan_coverage_threshold = Some(scan_threshold);
+    let exploration = options.exploration.as_mut().unwrap();
+    exploration.follow_up = None;
+    if !routed {
+        exploration.route_3d = None;
+    }
+    options
+}
+
+/// The fleet's energy left at the end, watt-hours.
+fn left_wh(frames: &[Value]) -> f64 {
+    frames.last().unwrap()["energy_reserves"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|reserve| reserve["remaining_wh"].as_f64().unwrap())
+        .sum()
+}
+
+/// Mission flights routed round and over the fixture's hills touch nothing,
+/// spend less, and a run checkpointed among them finishes as it would have.
+#[test]
+fn routes_in_three_dimensions_spend_less_and_touch_nothing() {
+    let options = routed(0.2, true);
+    let (_, with) = replay(&options);
+    let (_, without) = replay(&routed(0.2, false));
+    assert_eq!(phase(with.last().unwrap()), "complete");
+    assert_eq!(contacts(&with), 0);
+    assert!(
+        left_wh(&with) > left_wh(&without),
+        "{} against {}",
+        left_wh(&with),
+        left_wh(&without)
+    );
+    let first = with
+        .iter()
+        .position(|frame| phase(frame) == "inspecting")
+        .unwrap();
+    let at = first + 10;
+    let mut original = run_with(&options);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = run_with(&options);
+    resumed.restore(&checkpoint).expect("restore accepted");
+    for (k, frame) in with.iter().enumerate().skip(at) {
+        resumed.step().unwrap();
+        let now = serde_json::to_value(resumed.last_frame().unwrap()).unwrap();
+        assert_eq!(&now, frame, "tick {k}");
+    }
+}
+
+/// The measurement behind docs/migration/ROUTES_3D.md: seven missions, which
+/// differ by when the scan ends and so by where the drones are then.
+#[test]
+#[ignore = "seven missions twice: run it to measure"]
+fn routes_in_three_dimensions_over_seven_missions() {
+    let mut saved_wh = 0.0;
+    for threshold in [0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5] {
+        let runs = [false, true].map(|on| replay(&routed(threshold, on)).1);
+        let done = runs.each_ref().map(|frames| {
+            frames
+                .iter()
+                .position(|frame| phase(frame) == "complete")
+                .expect("completes")
+        });
+        let left = runs.each_ref().map(|frames| left_wh(frames));
+        println!("{threshold}: done at {done:?}, {left:?} Wh left");
+        saved_wh += left[1] - left[0];
+    }
+    assert!(saved_wh > 0.0, "{saved_wh} Wh");
 }

@@ -436,6 +436,8 @@ pub struct MissionDriverStage {
     flown: Option<crate::navigation::FlownPositions>,
     follow_up_config: Option<crate::belief_world::FollowUpConfig>,
     follow_up: Option<FollowUp>,
+    /// What mission flights are routed through in three dimensions.
+    route_air: Option<crate::route_air::RouteAir>,
     /// Whether a scan with every drone homeward is over.
     ends_when_all_home: bool,
     /// Drones sweeping a hole in the coverage map under efficient_v1 (P4),
@@ -1233,6 +1235,7 @@ impl MissionDriverStage {
             flown: None,
             follow_up_config: None,
             follow_up: None,
+            route_air: None,
             ends_when_all_home: false,
             gap_fill: BTreeMap::new(),
             rescored: false,
@@ -2246,6 +2249,43 @@ impl MissionDriverStage {
     /// route turns, else the straight redirect, exactly as before.
     fn flight(&self, start: [f64; 3], target: [f64; 3], t_start: f64) -> Flight {
         let speed = self.config.redirect_speed_mps;
+        if let Some(air) = &self.route_air {
+            use argusnet_planning::route3d::Plan3d;
+            match air.plan(&self.route_model, start, target) {
+                Plan3d::Straight => {
+                    return Flight {
+                        route: None,
+                        lines: None,
+                        crowns: false,
+                        trajectory: GotoHover::redirect(
+                            start,
+                            [target[0], target[1]],
+                            target[2],
+                            t_start,
+                            speed,
+                        ),
+                    };
+                }
+                Plan3d::Route(route) => {
+                    return Flight {
+                        route: Some((route.length_m, route.corners_m.len())),
+                        lines: None,
+                        crowns: false,
+                        trajectory: GotoHover::routed_over(
+                            start,
+                            route.corners_m.iter().map(|c| [c[0], c[1]]).collect(),
+                            route.corners_m.iter().map(|c| c[2]).collect(),
+                            [target[0], target[1]],
+                            target[2],
+                            t_start,
+                            speed,
+                        ),
+                    };
+                }
+                // Flown as without it, the governor deciding.
+                Plan3d::NotWorth | Plan3d::None => {}
+            }
+        }
         match self.corners(start, target) {
             Some(corners) => Flight {
                 route: Some((corners.length_m, corners.via.len())),
@@ -2499,6 +2539,12 @@ impl MissionDriverStage {
     /// Go on for the map once the points are inspected. Before the first tick.
     pub fn set_follow_up(&mut self, config: Option<crate::belief_world::FollowUpConfig>) {
         self.follow_up_config = config;
+    }
+
+    /// Route mission flights in three dimensions over the map they build.
+    /// Before the first tick.
+    pub fn set_route_air(&mut self, air: Option<crate::route_air::RouteAir>) {
+        self.route_air = air;
     }
 
     /// End a scan whose every drone is homeward for good. Before the first

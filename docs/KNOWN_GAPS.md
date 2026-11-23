@@ -118,7 +118,7 @@ Status labels:
 | Coordinator election | **Implemented** | `CoordinationManager.elect_coordinator()` is wired into `scan_map_inspect`. |
 | Drone deconfliction events | **Implemented** | `src/argusnet/planning/deconfliction.py` and sim replay events |
 | Blocking safety gate | **Implemented (opt-in)** | `--safety-blocking` runs after deconfliction, clamps commands, emits events, and holds Abort-state drones. |
-| 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. In a no-prior run, `--belief-flights` holds mission flights above the believed surface with a height governor: a reactive floor, not a planned 3D route. |
+| 3D path planning | **Partial** | `field_v3` routes mission flights in three dimensions over the self-built map ([ROUTES_3D.md](migration/ROUTES_3D.md)). Otherwise the route planner is 2D; altitude is handled separately. In a no-prior run, `--belief-flights` holds mission flights above the believed surface with a height governor: a reactive floor, not a planned 3D route. |
 
 ## Evaluation, Benchmarking, Replay, And UI
 
