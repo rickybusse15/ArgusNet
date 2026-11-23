@@ -2,6 +2,9 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Inspection evidence (F7, first slice): `--inspection-evidence` asks for views of
+  each point from all round it and goes back for those missing, within bounds
+  (`docs/migration/INSPECTION_EVIDENCE.md`).
 - Site memory (F6, first slice): `sim --site-memory DIR --site ID` keeps each mission's
   map as a revision and says what changed since the last, `argusnet-rs site` reads it
   (`docs/migration/SITE_MEMORY.md`).

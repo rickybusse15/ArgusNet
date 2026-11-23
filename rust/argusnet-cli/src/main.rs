@@ -366,6 +366,11 @@ struct SimArgs {
     /// Every number is assumed.
     #[arg(long)]
     navigation: Option<String>,
+    /// With a profile, ask for views of each inspected point from all round it
+    /// and go back for those missing (F7). The replay gains
+    /// `meta.inspection_evidence`, its profile id `+evidence`.
+    #[arg(long, requires = "profile")]
+    inspection_evidence: bool,
     /// With a profile that routes mission flights in three dimensions
     /// (`field_v3`), plan a flight again when something newly mapped lies
     /// across its way. The replay's profile id gains `+replan`.
@@ -741,6 +746,10 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             exploration: profile.options().exploration.map(|exploration| {
                 argusnet_sim::belief_world::ExplorationConfig {
                     navigation: navigation.or(exploration.navigation),
+                    inspection_evidence: args
+                        .inspection_evidence
+                        .then(argusnet_sim::evidence::EvidenceConfig::default)
+                        .or(exploration.inspection_evidence),
                     route_3d: exploration.route_3d.map(|route| {
                         argusnet_planning::route3d::Route3dConfig {
                             replan: args

@@ -200,6 +200,6 @@ evidence of P5.3.
 F1 scorecards, F3 explanations and F4 comparisons have shipped as replay and
 mission slices, and F2 failure schedules has its first slice (sensor outages, link
 delays, source restarts). F5 continuous reserve replanning, F6 persistent memory
-and F7 evidence-based adaptive inspection are planned extensions of existing modules. See [their acceptance matrix](CAPABILITY_DELIVERY.md).
+and F7 evidence-based adaptive inspection have first slices. See [their acceptance matrix](CAPABILITY_DELIVERY.md).
 Energy-aware assignment, benchmark aggregation and POI dwell already exist; they
 must not be counted as completion of these richer features.
