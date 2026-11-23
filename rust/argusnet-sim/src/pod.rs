@@ -782,16 +782,18 @@ impl PodSensing {
             return None;
         }
         let limit = requirement.max_incidence_deg.to_radians();
-        let half = (self.lidar.horizontal_fov_deg.to_radians() / 2.0).min(limit);
-        let swath_m = 2.0 * agl_m * half.tan();
         let sensor = PointingPolicy::Nadir
             .commanded_body(0.0, 0.0)
             .then(Quat::from_ypr_deg(self.lidar_mount.rotation_ypr_deg));
+        // As the LiDAR is mounted: the swath is as wide as the rays that
+        // count reach across the track (body y).
+        let (mut left, mut right) = (f64::NEG_INFINITY, f64::INFINITY);
         let returns: f64 = self
             .sensor_rays()
             .into_iter()
             .filter_map(|ray| {
-                let down = -sensor.rotate(ray)[2];
+                let direction = sensor.rotate(ray);
+                let down = -direction[2];
                 if down < limit.cos().max(1e-6) {
                     return None;
                 }
@@ -799,6 +801,9 @@ impl PodSensing {
                 if range > self.lidar.max_range_m {
                     return None;
                 }
+                let across = direction[1] * range;
+                left = left.max(across);
+                right = right.min(across);
                 Some(self.lidar.returns.as_ref().map_or(1.0, |model| {
                     let reflectivity = model.reflectivity_of("terrain").unwrap_or(0.1);
                     model.detection_probability(reflectivity, down, range)
@@ -806,6 +811,10 @@ impl PodSensing {
                 }))
             })
             .sum();
+        let swath_m = left - right;
+        if !(swath_m.is_finite() && swath_m > 0.0) {
+            return None;
+        }
         let density_per_m2 = returns / (swath_m * speed_mps * interval_s);
         let count = (density_per_m2 * cell_area_m2).max(1.0);
         let bias = requirement.bias_floor_m;
@@ -1314,6 +1323,38 @@ mod tests {
 
     fn close(a: [f64; 3], b: [f64; 3], tol: f64) -> bool {
         (0..3).all(|k| (a[k] - b[k]).abs() < tol)
+    }
+
+    /// The predicted swath is the mounted sensor's: rolled a quarter turn
+    /// about its boresight, its short side lies across the track.
+    #[test]
+    fn a_predicted_pass_is_as_wide_as_the_mounted_sensor_sees() {
+        let requirement = argusnet_mapping::quality::QualityRequirement {
+            min_ground_density_per_m2: Some(0.03),
+            max_vertical_sigma_m: None,
+            max_age_s: None,
+            max_image_gsd_m: None,
+            max_incidence_deg: 40.0,
+            bias_floor_m: 0.0,
+        };
+        let predict = |roll_deg: f64| {
+            let mut rig = RigProfile::provisional();
+            for sensor in &mut rig.sensors {
+                if sensor.role == SensorRole::Lidar {
+                    sensor.rotation_ypr_deg = [0.0, 0.0, roll_deg];
+                }
+            }
+            PodSensing::new(rig, PointingPolicy::Nadir, flat_world())
+                .unwrap()
+                .predicted_pass(100.0, 20.0, 0.25, &requirement, 0.05, 25.0)
+                .unwrap()
+        };
+        let (as_built, rolled) = (predict(0.0), predict(90.0));
+        let wide = 200.0 * 35f64.to_radians().tan();
+        assert!((as_built.swath_m - wide).abs() < 1e-6, "{as_built:?}");
+        assert!(rolled.swath_m < 0.6 * wide, "{rolled:?}");
+        assert!(rolled.density_per_m2 > as_built.density_per_m2);
+        assert!(as_built.density_per_m2 > 0.0);
     }
 
     #[test]
