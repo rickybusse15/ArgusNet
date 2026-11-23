@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use argusnet_mapping::quality::{
     assess, plane_fit, pose_weight, CellEvidence, DeficitCounts, DeficitReason, PlaneMoments,
-    PoseEvidence, QualityRequirement,
+    PoseEvidence, PosesNow, QualityRequirement,
 };
 use argusnet_mapping::wire_prior::PriorStatus;
 use argusnet_types::Bounds2d;
@@ -950,22 +950,24 @@ impl PosedReturns {
             horizontal_sq_m2: self.horizontal_sq[index],
             weight_sq: self.weight_sq[index],
             slope: 0.0,
-            best_now_m: None,
+            now: PosesNow::default(),
         }
     }
 
-    /// The best `[vertical, horizontal]` any one aircraft places returns by
-    /// as of `tick`: the one whose vertical is smallest, of those mapping
-    /// lately. With none, what the last to map had: once all are home,
-    /// nothing has been learned that would do better.
-    fn best_now_m(&self, tick: u64) -> Option<[f64; 2]> {
-        let newest = self.now.values().map(|(at, _)| *at).max()?;
+    /// The `[vertical, horizontal]` each aircraft mapping lately places its
+    /// returns by as of `tick`. With none, what the last to map had: once all
+    /// are home, nothing has been learned that would do better.
+    fn poses_now(&self, tick: u64) -> PosesNow {
+        let Some(newest) = self.now.values().map(|(at, _)| *at).max() else {
+            return PosesNow::default();
+        };
         let since = tick.min(newest).saturating_sub(POSE_NOW_TICKS);
-        self.now
-            .values()
-            .filter(|(at, _)| *at >= since)
-            .map(|(_, sigmas)| *sigmas)
-            .min_by(|a, b| a[0].total_cmp(&b[0]))
+        PosesNow::of(
+            self.now
+                .values()
+                .filter(|(at, _)| *at >= since)
+                .map(|(_, sigmas)| *sigmas),
+        )
     }
 }
 
@@ -1455,9 +1457,17 @@ impl BeliefGrid {
         self.quality_tick
     }
 
+    /// How well the aircraft mapping as of `tick` place returns.
+    fn poses_now(&self, tick: u64) -> PosesNow {
+        self.posed
+            .as_ref()
+            .map_or_else(PosesNow::default, |posed| posed.poses_now(tick))
+    }
+
     /// Cell `index`'s accepted evidence at tick `now`, ages in seconds at
     /// `dt_s` a tick.
-    fn evidence(&self, index: usize, now: u64, dt_s: f64) -> CellEvidence {
+    /// With [`Self::poses_now`] as of then.
+    fn evidence(&self, index: usize, now: u64, dt_s: f64, poses_now: PosesNow) -> CellEvidence {
         let accepted_returns = self.accepted_count.get(index).copied().unwrap_or(0);
         CellEvidence {
             ground_returns: self.ground_count[index],
@@ -1478,7 +1488,7 @@ impl BeliefGrid {
             relief_m2: self.relief_m2(index),
             pose: self.posed.as_ref().map(|posed| PoseEvidence {
                 slope: self.slope(index),
-                best_now_m: posed.best_now_m(now),
+                now: poses_now,
                 ..posed.evidence(index)
             }),
         }
@@ -1486,8 +1496,9 @@ impl BeliefGrid {
 
     /// Every cell's evidence at tick `now`, for the map's report.
     pub fn all_evidence(&self, now: u64, dt_s: f64) -> Vec<CellEvidence> {
+        let poses_now = self.poses_now(now);
         (0..self.cell_count())
-            .map(|k| self.evidence(k, now, dt_s))
+            .map(|k| self.evidence(k, now, dt_s, poses_now))
             .collect()
     }
 
@@ -1506,10 +1517,11 @@ impl BeliefGrid {
         dt_s: f64,
     ) -> QualityLayer {
         let area = self.resolution_m * self.resolution_m;
+        let poses_now = self.poses_now(now);
         let reasons: Vec<DeficitReason> = (0..self.cell_count())
             .map(|k| {
                 assess(
-                    &self.evidence(k, now, dt_s),
+                    &self.evidence(k, now, dt_s, poses_now),
                     area,
                     per_return_sigma_m,
                     self.image_footprint.map(|(_, finest)| finest),
@@ -3623,6 +3635,27 @@ impl PhysicalGuard {
         })
     }
 
+    /// Where `node_id` believes it is once physics has moved it from `at_m`,
+    /// where it was while believing it was at `position_m`, to `moved_m`.
+    fn believed(
+        &self,
+        node_id: &str,
+        position_m: [f64; 3],
+        at_m: [f64; 3],
+        moved_m: [f64; 3],
+    ) -> [f64; 3] {
+        // Moved by as much, where the error is the same there.
+        let by_as_much = std::array::from_fn(|k| position_m[k] + (moved_m[k] - at_m[k]));
+        let Some(flown) = &self.flown else {
+            return by_as_much;
+        };
+        let truth = flown.truth(node_id, by_as_much);
+        if (0..3).all(|k| (truth[k] - moved_m[k]).abs() < 1e-9) {
+            return by_as_much;
+        }
+        flown.believed(node_id, moved_m)
+    }
+
     /// How far from the ground and structures the guard keeps platforms,
     /// metres.
     pub fn clearance_m(&self) -> f64 {
@@ -3651,13 +3684,14 @@ impl PhysicalGuard {
     /// from any wire, with a contact recorded for each move. An aircraft that
     /// is not where it believes is moved by what it meets where it is.
     pub fn enforce(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
+        // An error it has none of where it is, it may have where it is moved.
         let off = self.off_m(node_id, position);
-        if off == [0.0; 3] {
+        if self.flown.is_none() {
             return self.enforce_true(node_id, timestamp_s, position);
         }
         let at = std::array::from_fn(|k| position[k] + off[k]);
         let moved = self.enforce_true(node_id, timestamp_s, at);
-        std::array::from_fn(|k| position[k] + (moved[k] - at[k]))
+        self.believed(node_id, position, at, moved)
     }
 
     fn enforce_true(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
@@ -3723,13 +3757,13 @@ impl PhysicalGuard {
         position: [f64; 3],
     ) -> [f64; 3] {
         let (off_from, off) = (self.off_m(node_id, from), self.off_m(node_id, position));
-        if off == [0.0; 3] && off_from == [0.0; 3] {
+        if self.flown.is_none() {
             return self.enforce_from_true(node_id, timestamp_s, from, position);
         }
         let at = std::array::from_fn(|k| position[k] + off[k]);
         let start = std::array::from_fn(|k| from[k] + off_from[k]);
         let moved = self.enforce_from_true(node_id, timestamp_s, start, at);
-        std::array::from_fn(|k| position[k] + (moved[k] - at[k]))
+        self.believed(node_id, position, at, moved)
     }
 
     fn enforce_from_true(
@@ -4704,6 +4738,31 @@ mod tests {
         let clear = low.enforce_from("e", 2.0, [50.0, -40.0, 32.0], [50.0, 40.0, 32.0]);
         assert_eq!(clear, [50.0, 40.0, 32.0]);
         assert!(low.take_contacts().is_empty());
+    }
+
+    /// Near its pad an aircraft's error shrinks, so where it believes it is
+    /// once moved is not where it was plus the move: it is moved out of what
+    /// it met all the same, from anywhere.
+    #[test]
+    fn an_aircraft_near_its_pad_is_left_out_of_what_it_met() {
+        use crate::navigation::FlownPositions;
+        for offset in [[0.0, 0.0, -30.0], [12.0, -9.0, -30.0], [0.0, 25.0, -4.0]] {
+            let flown = FlownPositions::off_from_pad("d", offset, [0.0, 0.0, 0.0]);
+            let guard = guard_over(None, &[]).with_flown_positions(flown.clone());
+            for x in [0.0, 8.0, 20.0, 40.0] {
+                for z in [-5.0, 0.5, 4.0, 10.0, 14.0, 40.0] {
+                    let held = guard.enforce("d", 0.0, [x, 0.0, z]);
+                    let truth = flown.truth("d", held);
+                    assert!(!guard.violates("d", held), "{offset:?} {x} {z}: {held:?}");
+                    assert!(
+                        truth[2] >= guard.clearance_m() - 1e-6,
+                        "{offset:?} {x} {z}: {truth:?}"
+                    );
+                    let swept = guard.enforce_from("d", 0.0, [x, 0.0, 60.0], [x, 0.0, z]);
+                    assert!(!guard.violates("d", swept), "{offset:?} {x} {z}: {swept:?}");
+                }
+            }
+        }
     }
 
     /// A platform within the guard's clearance of a wire is pushed straight
