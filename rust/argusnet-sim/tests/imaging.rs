@@ -156,6 +156,28 @@ fn an_image_requirement_is_flown_for() {
     assert!(fine(&beyond) < 0.1, "nor flown low for: {}", fine(&beyond));
 }
 
+/// A flight already lower than the requirement asks is slowed for the height
+/// it flies: at the speed the requirement's own height allows, every image
+/// would blur.
+#[test]
+fn a_lower_flight_is_slowed_for_its_own_height() {
+    let long_exposure = ImagingConfig {
+        visible_exposure_s: 4.0e-3,
+        ..ImagingConfig::default()
+    };
+    let kept = |gsd_m| {
+        let mut options = options(true, gsd_m, None);
+        options.exploration.as_mut().unwrap().imaging = Some(long_exposure.clone());
+        share(&images(&frames(&options)), "visible", |image| {
+            image.get("refusal").is_none()
+        })
+    };
+    let (free, held) = (kept(None), kept(Some(0.2)));
+    // 0.2 m asks for no lower than 600 m, so only the speed can help.
+    assert!(free < 0.5, "unheld, {free} of images count");
+    assert!(held > 0.8, "held, {held} of images count");
+}
+
 #[test]
 fn a_run_with_an_image_requirement_resumes_exactly() {
     let options = options(true, Some(0.02), None);

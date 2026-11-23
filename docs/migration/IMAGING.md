@@ -37,7 +37,8 @@ at least that fine.
 - A requirement finer than the floor height allows (`min_image_agl_m`, 40 m) is
   `image_limited`: unreachable, never met, and not flown for.
 - Otherwise the whole flight comes down to 0.9 of the height that gives the
-  sample distance straight down, and slows to keep the image sharp.
+  sample distance straight down, and slows to keep the image sharp from the
+  height each drone flies, which may be lower still.
 
 ## Measured (2026-11-22)
 
@@ -71,8 +72,6 @@ West Pleasant View, 600 s, the field profile's flags with view planning:
 - What stands between the camera and the ground is not considered when the map
   places an image: a cell behind a building counts as imaged.
 - One visible camera meets a requirement; stereo and thermal are reported only.
-- Ground more than twice as far below the aircraft as what is under it is left
-  out of an image.
 - No trigger interval, overlap, light or weather.
 
 ## Tests
