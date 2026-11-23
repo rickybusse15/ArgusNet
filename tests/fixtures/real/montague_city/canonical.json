@@ -1,0 +1,29 @@
+{
+ "name": "montague_city",
+ "dem": "dem.tif",
+ "osm": "osm.json",
+ "map_preset": "medium",
+ "origin": [42.586, -72.574],
+ "terrain_preset": "urban_flat",
+ "seed": 7,
+ "duration_s": 60.0,
+ "expected": {
+  "import": {
+   "buildings": 290,
+   "buildings_with_estimated_height": 290,
+   "trees": 0,
+   "power_lines": 14,
+   "features_by_class": {"road": 96, "water": 18},
+   "elevation_m": [35.70, 90.41]
+  },
+  "run": {
+   "buildings": 228,
+   "buildings_outside_map": 62,
+   "trees": 0,
+   "trees_outside_map": 0,
+   "power_lines": {"way/170290226": 5, "way/307819485": 3, "way/383255345": 3, "way/845178281": 15, "way/903578888": 2, "way/903578889": 5, "way/1120253249": 2, "way/1120482932": 3, "way/1158302033": 12, "way/1158302034": 4, "way/1158302035": 4, "way/1158302036": 3, "way/1158302037": 3, "way/1158302038": 2},
+   "origin_h_m": 33.0,
+   "terrain_m": [2.70, 57.41]
+  }
+ }
+}

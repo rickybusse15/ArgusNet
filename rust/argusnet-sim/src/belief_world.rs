@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use argusnet_mapping::quality::{
-    assess, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
+    assess, plane_fit, CellEvidence, DeficitCounts, DeficitReason, PlaneMoments, QualityRequirement,
 };
 use argusnet_mapping::wire_prior::PriorStatus;
 use argusnet_types::Bounds2d;
@@ -139,6 +139,12 @@ pub struct ExplorationConfig {
     /// their own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fault_return: Option<FaultReturnConfig>,
+    /// Take a cell's ground height from a plane through its accepted returns,
+    /// at the cell's centre, in place of the mean of its returns wherever in
+    /// it they fell; its claimed sigma is the plane's. Needs a quality
+    /// requirement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plane_heights: bool,
     /// Write the map's report ([`crate::map_report`]) into the replay's
     /// `meta.map_report` when the run ends. Needs a quality requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -375,6 +381,19 @@ impl WirePlanningConfig {
 }
 
 impl ExplorationConfig {
+    /// The noise of one ground return, as the map's claims take it: the
+    /// rig's own LiDAR's with plane heights, whose claims state the rest of a
+    /// cell's scatter themselves; the scan's otherwise.
+    pub fn per_return_sigma_m(&self) -> f64 {
+        let lidar = self
+            .rig
+            .as_ref()
+            .filter(|_| self.plane_heights)
+            .and_then(|rig| rig.mount(crate::rig::SensorRole::Lidar))
+            .and_then(|mount| mount.lidar.as_ref());
+        lidar.map_or(self.scan.range_noise_m, |lidar| lidar.range_noise_m)
+    }
+
     /// The navigation camera the run flies: the rig's, or the stand-alone
     /// one.
     pub fn effective_nav_camera(&self) -> Option<NavCameraConfig> {
@@ -427,6 +446,7 @@ impl Default for ExplorationConfig {
             mission_flights: None,
             view_planning: None,
             imaging: None,
+            plane_heights: false,
             map_report: false,
             fault_return: None,
         }
@@ -529,6 +549,13 @@ impl ExplorationConfig {
                 );
             }
             fault_return.validate()?;
+        }
+        if self.plane_heights && self.quality.is_none() {
+            return Err(
+                "plane heights are fitted to a quality requirement's accepted returns: \
+                 they need one"
+                    .into(),
+            );
         }
         if self.map_report && self.quality.is_none() {
             return Err("a map report needs a quality requirement to report on".into());
@@ -638,6 +665,9 @@ pub struct BeliefGrid {
     accepted_sq_m2: Vec<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     accepted_tick: Vec<i64>,
+    /// Per cell, where the accepted returns fell. Empty when not kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_plane: Vec<PlaneMoments>,
     /// The tick the quality was last published at, so a restored grid
     /// publishes the same ages. `None` without tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +800,7 @@ impl BeliefGrid {
             accepted_count: Vec::new(),
             accepted_sum_m: Vec::new(),
             accepted_sq_m2: Vec::new(),
+            accepted_plane: Vec::new(),
             accepted_tick: Vec::new(),
             quality_tick: None,
             image_footprint: None,
@@ -865,6 +896,7 @@ impl BeliefGrid {
             self.accepted_count.fill(0);
             self.accepted_sum_m.fill(0.0);
             self.accepted_sq_m2.fill(0.0);
+            self.accepted_plane.fill(PlaneMoments::default());
             self.accepted_tick.fill(-1);
             self.quality_tick = Some(0);
         }
@@ -898,6 +930,7 @@ impl BeliefGrid {
     /// meaningful under the admission policy that gathered it.
     pub fn same_quality_tracking(&self, other: &Self) -> bool {
         self.accept_incidence_deg == other.accept_incidence_deg
+            && self.accepted_plane.is_empty() == other.accepted_plane.is_empty()
             && self.image_footprint == other.image_footprint
     }
 
@@ -939,11 +972,59 @@ impl BeliefGrid {
     }
 
     fn ground_value(&self, index: usize) -> f64 {
+        if let Some(height) = self.plane_height(index) {
+            return height;
+        }
         if self.ground_count[index] > 0 {
             self.ground_sum[index] / self.ground_count[index] as f64
         } else {
             f64::NAN
         }
+    }
+
+    /// The plane through cell `index`'s accepted returns, at its centre, when
+    /// the map keeps where they fell and they fix one.
+    fn plane_height(&self, index: usize) -> Option<f64> {
+        let plane = *self.accepted_plane.get(index)?;
+        plane_fit(&CellEvidence {
+            accepted_returns: self.accepted_count[index],
+            accepted_height_sum_m: self.accepted_sum_m[index],
+            accepted_height_sq_sum_m2: self.accepted_sq_m2[index],
+            plane: Some(plane),
+            ..CellEvidence::default()
+        })
+        .map(|fit| fit.height_m)
+    }
+
+    /// The variance of the ground over cell `index` that the cells beside it
+    /// show, m², when the map keeps where returns fell and this cell's fix no
+    /// plane: a slope `g` over a cell of side `L` varies by `g² L²/12`. Zero
+    /// where too few are seen to say.
+    fn relief_m2(&self, index: usize) -> f64 {
+        if self.accepted_plane.is_empty()
+            || self.accepted_count[index] == 0
+            || self.plane_height(index).is_some()
+        {
+            return 0.0;
+        }
+        let (i, j) = (index % self.nx, index / self.nx);
+        let seen =
+            |i: usize, j: usize| Some(self.ground_value(j * self.nx + i)).filter(|z| z.is_finite());
+        // The rise per cell along one axis: across it, or to one side.
+        let rise = |low: Option<f64>, here: Option<f64>, high: Option<f64>| match (low, here, high)
+        {
+            (Some(low), _, Some(high)) => (high - low) / 2.0,
+            (Some(low), Some(here), None) => here - low,
+            (None, Some(here), Some(high)) => high - here,
+            _ => 0.0,
+        };
+        let here = seen(i, j);
+        let left = i.checked_sub(1).and_then(|i| seen(i, j));
+        let right = (i + 1 < self.nx).then(|| seen(i + 1, j)).flatten();
+        let below = j.checked_sub(1).and_then(|j| seen(i, j));
+        let above = (j + 1 < self.ny).then(|| seen(i, j + 1)).flatten();
+        let (east, north) = (rise(left, here, right), rise(below, here, above));
+        (east * east + north * north) / 12.0
     }
 
     fn blocks(&self) -> (usize, usize) {
@@ -1012,6 +1093,12 @@ impl BeliefGrid {
         self.accepted_sq_m2 = vec![0.0; cells];
         self.accepted_tick = vec![-1; cells];
         self.quality_tick = Some(0);
+    }
+
+    /// Keep where each cell's accepted returns fell, and give its height at
+    /// its centre from them. After [`Self::track_quality`], before any scan.
+    pub fn track_planes(&mut self) {
+        self.accepted_plane = vec![PlaneMoments::default(); self.cell_count()];
     }
 
     /// Keep each cell's finest image too (SR4). Before any scan.
@@ -1106,6 +1193,8 @@ impl BeliefGrid {
                 .get(index)
                 .filter(|&&gsd| gsd > 0)
                 .map(|&gsd| gsd as f64 * 1e-5),
+            plane: self.accepted_plane.get(index).copied(),
+            relief_m2: self.relief_m2(index),
         }
     }
 
@@ -1508,6 +1597,15 @@ impl BeliefGrid {
                             self.accepted_count[index] += 1;
                             self.accepted_sum_m[index] += z;
                             self.accepted_sq_m2[index] += z * z;
+                            if let Some(plane) = self.accepted_plane.get_mut(index) {
+                                let centre =
+                                    |k: usize, low: f64| low + (k as f64 + 0.5) * self.resolution_m;
+                                plane.add(
+                                    hit.point_m[0] - centre(index % self.nx, self.x_min_m),
+                                    hit.point_m[1] - centre(index / self.nx, self.y_min_m),
+                                    z,
+                                );
+                            }
                             self.accepted_tick[index] = tick as i64;
                         }
                     }
@@ -1603,11 +1701,11 @@ impl BeliefGrid {
         self.nx * self.ny
     }
 
-    /// Mean ground height of cell `(i, j)`, if any ground return landed there.
+    /// Ground height of cell `(i, j)`, if any ground return landed there: the
+    /// mean of its returns, or their plane at its centre ([`Self::track_planes`]).
     pub fn ground_ij(&self, i: usize, j: usize) -> Option<f64> {
         let index = j * self.nx + i;
-        (self.ground_count[index] > 0)
-            .then(|| self.ground_sum[index] / self.ground_count[index] as f64)
+        (self.ground_count[index] > 0).then(|| self.ground_value(index))
     }
 
     /// Centre of cell `(i, j)`, metres.
@@ -1865,6 +1963,16 @@ impl FittedHazard {
             (xy_m[0] - nearest.start_m[0]) * normal[0] + (xy_m[1] - nearest.start_m[1]) * normal[1];
         let sign = if side < 0.0 { -1.0 } else { 1.0 };
         Some([normal[0] * sign, normal[1] * sign])
+    }
+
+    /// Whether a flight kept `agl_m` over the believed ground is above this
+    /// wire's clearance all along it.
+    fn cleared_by(&self, belief: &BeliefSnapshot, agl_m: f64) -> bool {
+        self.pieces.iter().all(|piece| {
+            [piece.start_m, piece.end_m]
+                .iter()
+                .all(|end| belief.ground_at(end[0], end[1]) + agl_m >= end[2] + self.clearance_m)
+        })
     }
 
     /// Whether a straight flight crosses this wire.
@@ -2784,12 +2892,14 @@ impl BeliefSnapshot {
     /// is crossing one, or wire planning is off, or when `goal_m` lies inside
     /// the corridor, where the flight is going on purpose: `goal_m` is `None`
     /// for a flight with no goal of its own, such as a search lane, which is
-    /// turned out wherever it runs.
+    /// turned out wherever it runs. A flight kept `over_agl_m` over the ground
+    /// is in no corridor of a wire that clears.
     pub fn out_of_corridor(
         &self,
         xy_m: [f64; 2],
         direction: [f64; 2],
         goal_m: Option<[f64; 2]>,
+        over_agl_m: Option<f64>,
     ) -> Option<[f64; 2]> {
         /// A flight within about 25 degrees of a wire is running along it.
         /// Wider, a flight crossing at an angle was turned back out at the
@@ -2804,14 +2914,23 @@ impl BeliefSnapshot {
         self.fitted_hazards
             .iter()
             .filter(|hazard| {
-                hazard.repels && hazard.covers(here) && !goal.is_some_and(|g| hazard.covers(g))
+                hazard.repels
+                    && hazard.covers(here)
+                    && !goal.is_some_and(|g| hazard.covers(g))
+                    && !over_agl_m.is_some_and(|agl_m| hazard.cleared_by(self, agl_m))
             })
             .find_map(|hazard| hazard.way_out(xy_m, direction, ALONG_COS))
     }
 
     /// What a straight flight between two points costs in crossing fitted
-    /// wires, in metres of flight: nothing without wire planning.
-    pub fn crossing_cost_m(&self, from_m: [f64; 2], to_m: [f64; 2]) -> f64 {
+    /// wires, in metres of flight: nothing without wire planning, nor for a
+    /// wire that a flight kept `over_agl_m` over the ground clears.
+    pub fn crossing_cost_m(
+        &self,
+        from_m: [f64; 2],
+        to_m: [f64; 2],
+        over_agl_m: Option<f64>,
+    ) -> f64 {
         if self.crossing_penalty_m <= 0.0 {
             return 0.0;
         }
@@ -2820,10 +2939,13 @@ impl BeliefSnapshot {
         /// What a metre flown over a wire's own line costs, in metres: a
         /// flight along a line has neither over nor under for long.
         const ALONG_COST: f64 = 5.0;
+        let in_the_way = |hazard: &FittedHazard| {
+            hazard.repels && !over_agl_m.is_some_and(|agl_m| hazard.cleared_by(self, agl_m))
+        };
         let crossed = self
             .fitted_hazards
             .iter()
-            .filter(|hazard| hazard.repels && hazard.crossed_by(from_m, to_m))
+            .filter(|hazard| hazard.crossed_by(from_m, to_m) && in_the_way(hazard))
             .count();
         let length = (to_m[0] - from_m[0]).hypot(to_m[1] - from_m[1]);
         let steps = (length / STEP_M).ceil().max(1.0) as usize;
@@ -2837,7 +2959,7 @@ impl BeliefSnapshot {
                 ];
                 self.fitted_hazards
                     .iter()
-                    .any(|hazard| hazard.repels && hazard.covers(at))
+                    .any(|hazard| hazard.covers(at) && in_the_way(hazard))
             })
             .count();
         self.crossing_penalty_m * crossed as f64 + ALONG_COST * STEP_M * along as f64
@@ -3863,25 +3985,42 @@ mod tests {
         let snapshot = belief.snapshot(&config);
         let (at, east) = ([50.0, 3.0], [1.0, 0.0]);
         assert!(snapshot
-            .out_of_corridor(at, east, Some([90.0, 80.0]))
+            .out_of_corridor(at, east, Some([90.0, 80.0]), None)
             .is_some());
-        assert_eq!(snapshot.out_of_corridor(at, east, Some([90.0, 4.0])), None);
+        assert_eq!(
+            snapshot.out_of_corridor(at, east, Some([90.0, 4.0]), None),
+            None
+        );
         assert!(
-            snapshot.out_of_corridor(at, east, None).is_some(),
+            snapshot.out_of_corridor(at, east, None, None).is_some(),
             "a lane is turned out wherever it runs"
         );
         assert_eq!(
-            snapshot.out_of_corridor(at, [0.7, 0.7], Some([90.0, 80.0])),
+            snapshot.out_of_corridor(at, [0.7, 0.7], Some([90.0, 80.0]), None),
             None,
             "crossing at 45 degrees is the climb's, not a turn's"
         );
         assert_eq!(
             belief
                 .snapshot(&ExplorationConfig::default())
-                .out_of_corridor(at, east, Some([90.0, 80.0])),
+                .out_of_corridor(at, east, Some([90.0, 80.0]), None),
             None,
             "off without wire planning"
         );
+        // Flown well over it, it is neither turned from nor paid for; flown
+        // at its height, both.
+        // (The ground here is unseen: heights are over its stand-in.)
+        let level = 100.0 - snapshot.ground_at(50.0, 0.0);
+        let turned = |over_m: f64| {
+            snapshot
+                .out_of_corridor(at, east, Some([90.0, 80.0]), Some(level + over_m))
+                .is_some()
+        };
+        assert!(turned(0.0) && !turned(60.0));
+        let cost = |over| snapshot.crossing_cost_m([50.0, -40.0], [50.0, 40.0], over);
+        assert!(cost(None) >= 300.0);
+        assert_eq!(cost(Some(level)), cost(None));
+        assert_eq!(cost(Some(level + 60.0)), 0.0);
     }
 
     fn wire(height_m: f64) -> PowerLine {

@@ -215,8 +215,12 @@ impl RunOptions {
     pub fn field_v2() -> Self {
         let mut options = Self::field_v1();
         let exploration = options.exploration.as_mut().expect("field_v1 explores");
-        exploration.view_planning = Some(argusnet_planning::views::ViewPlanningConfig::default());
+        exploration.view_planning = Some(argusnet_planning::views::ViewPlanningConfig {
+            over_wires: true,
+            ..Default::default()
+        });
         exploration.map_report = true;
+        exploration.plane_heights = true;
         exploration.fault_return = Some(crate::belief_world::FaultReturnConfig::default());
         exploration.imaging = Some(crate::imaging::ImagingConfig::default());
         exploration.quality = Some(argusnet_mapping::quality::QualityRequirement {

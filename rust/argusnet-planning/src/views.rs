@@ -108,6 +108,12 @@ pub struct ViewPlanningConfig {
     /// settles (docs/migration/VIEW_PLANNING.md).
     #[serde(default)]
     pub plan_pointing: bool,
+    /// Whether a wire the cruise height already clears is flown over like
+    /// open ground. Otherwise every fitted wire costs a leg a detour to cross
+    /// and is turned away from, however far below it runs: a strip between
+    /// two lines is then left until nothing else is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub over_wires: bool,
 }
 
 fn yes() -> bool {
@@ -149,6 +155,7 @@ impl Default for ViewPlanningConfig {
             leg_turn_deg: default_leg_turn(),
             plan_goals: true,
             plan_pointing: false,
+            over_wires: false,
         }
     }
 }

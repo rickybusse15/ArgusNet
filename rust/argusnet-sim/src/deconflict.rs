@@ -255,6 +255,10 @@ pub struct DeconflictStage {
     /// at once (and fly it off again when the conflict ends). `None` (every
     /// run before it) applies each resolution whole, as the reference does.
     ramp: Option<OffsetRamp>,
+    /// With `ramp` and a self-built map: keep the offsets clear of the wires
+    /// the map believes in, looking ahead as the height governor does.
+    /// `None` (every run before it) separates in height whatever is there.
+    wires: Option<SeparationWires>,
     /// With `ramp`: how far each platform is from where it was proposed,
     /// from the resolutions so far, and where that was. Checkpointed.
     offsets: std::collections::BTreeMap<String, HeldOffset>,
@@ -293,6 +297,14 @@ impl HeldOffset {
             [0.0; 3]
         }
     }
+}
+
+/// The wires a ramped stage's offsets are kept clear of: how far to look and
+/// how far to keep, as the height governor does, and the map they are in.
+#[derive(Debug, Clone)]
+pub struct SeparationWires {
+    pub config: crate::belief_world::WirePlanningConfig,
+    pub map: crate::belief_world::BeliefHandle,
 }
 
 /// How fast a deconfliction offset is flown in and out.
@@ -376,6 +388,7 @@ impl DeconflictStage {
             mapped: None,
             mapped_seen: None,
             ramp: None,
+            wires: None,
             offsets: std::collections::BTreeMap::new(),
         }
     }
@@ -419,6 +432,41 @@ impl DeconflictStage {
     pub fn set_offset_ramp(&mut self, ramp: Option<OffsetRamp>) {
         self.ramp = ramp;
         self.offsets.clear();
+    }
+
+    /// Keep ramped offsets from taking a platform into the wires believed
+    /// ahead of it: the height governor's floor and ceiling, which it set
+    /// before this stage, are not undone by one.
+    pub fn set_separation_wires(&mut self, wires: Option<SeparationWires>) {
+        self.wires = wires;
+    }
+
+    /// The lowest and highest a platform at `at`, flying `velocity`, can be
+    /// asked to go for another's sake: the wires believed ahead, and never
+    /// past where it was proposed (a governor part way over a wire is not
+    /// asked to be there already).
+    fn wire_limits(&self, at: [f64; 3], velocity: [f64; 3]) -> (f64, f64) {
+        let Some(SeparationWires { config, map }) = &self.wires else {
+            return (f64::NEG_INFINITY, f64::INFINITY);
+        };
+        let speed = velocity[0].hypot(velocity[1]);
+        let direction = if speed > 1e-6 {
+            [velocity[0] / speed, velocity[1] / speed]
+        } else {
+            [0.0, 0.0]
+        };
+        let reach = (speed * config.lookahead_s).max(config.min_reach_m);
+        let bounds = map.current().hazard_bounds_ahead(
+            [at[0], at[1]],
+            direction,
+            reach,
+            at[2],
+            config.clearance_m,
+        );
+        (
+            bounds.floor_m.map_or(f64::NEG_INFINITY, |z| z.min(at[2])),
+            bounds.ceiling_m.map_or(f64::INFINITY, |z| z.max(at[2])),
+        )
     }
 
     pub fn clear_physical_guard(&mut self) {
@@ -552,7 +600,8 @@ impl StageHandler for DeconflictStage {
                 (node_id.clone(), carried)
             })
             .collect();
-        let (wanted, events) = self.vertical_separation(&proposed, &held, context.timestamp_s);
+        let (wanted, events, short) =
+            self.vertical_separation(&proposed, &held, context.timestamp_s);
         let mut moved = 0;
         for (node_id, from, _) in proposed {
             let Some(platform) = context.world.platform_mut(&node_id) else {
@@ -601,6 +650,12 @@ impl StageHandler for DeconflictStage {
                 event.resolution.as_str()
             ));
         }
+        for Shortfall { pair, apart_m } in &short {
+            context.note(format!(
+                "deconflict {} and {} have room for only {apart_m:.2} m of height between them",
+                pair[0], pair[1]
+            ));
+        }
         let ran = !events.is_empty();
         self.state.events = events;
         if moved > 0 && !ran {
@@ -612,6 +667,15 @@ impl StageHandler for DeconflictStage {
             Ok(StageOutcome::NoWork)
         }
     }
+}
+
+/// A conflicting pair with less room above and below than the vertical
+/// separation: between the ground and a wire.
+#[derive(Debug, Clone, PartialEq)]
+struct Shortfall {
+    pair: [String; 2],
+    /// The height between them once both have gone as far as they may.
+    apart_m: f64,
 }
 
 /// What a ramped stage checkpoints.
@@ -635,6 +699,10 @@ impl DeconflictStage {
     /// (level or above: up), keeps going the way it has started, and goes up
     /// instead when the ground leaves no room below. When the ways no
     /// longer conflict nothing is asked and the offset is flown off.
+    ///
+    /// With wire planning a yielder goes no further than the wires believed
+    /// ahead allow, and the peer makes up the rest the other way: turning the
+    /// yielder back would take it through the peer's height.
     fn vertical_separation(
         &self,
         proposed: &[(String, [f64; 3], [f64; 3])],
@@ -643,6 +711,7 @@ impl DeconflictStage {
     ) -> (
         std::collections::BTreeMap<String, [f64; 3]>,
         Vec<DeconflictionEvent>,
+        Vec<Shortfall>,
     ) {
         use argusnet_planning::deconfliction::{yielder, Resolution};
         let config = self.state.config;
@@ -672,6 +741,10 @@ impl DeconflictStage {
         let height = |wanted: &std::collections::BTreeMap<String, [f64; 3]>, k: usize| {
             proposed[k].1[2] + wanted.get(&proposed[k].0).map_or(0.0, |offset| offset[2])
         };
+        let limits: Vec<(f64, f64)> = proposed
+            .iter()
+            .map(|(_, at, velocity)| self.wire_limits(*at, *velocity))
+            .collect();
         let mut reported = std::collections::BTreeSet::new();
         for _ in 0..=proposed.len() {
             let mut changed = false;
@@ -712,8 +785,26 @@ impl DeconflictStage {
                 {
                     direction = 1.0;
                 }
-                let offset = target(direction) - at[2];
-                wanted.entry(proposed[y].0.clone()).or_insert([0.0; 3])[2] = offset;
+                let full = target(direction);
+                let reached = full.clamp(limits[y].0, limits[y].1);
+                if reached != full {
+                    // A wire leaves the yielder no more room: its peer goes
+                    // the other way, as far as its own wires allow.
+                    let at = proposed[p].1;
+                    let away = (reached - direction * config.vertical_separation_m)
+                        .clamp(limits[p].0, limits[p].1);
+                    // Nor lower over the ground than a yielder may be sent;
+                    // one already lower is not sent down at all.
+                    let away = if away < at[2] {
+                        roles
+                            .clamp([at[0], at[1]], away, config.min_agl_m)
+                            .map_or(away, |floor| away.max(floor).min(at[2]))
+                    } else {
+                        away
+                    };
+                    wanted.entry(proposed[p].0.clone()).or_insert([0.0; 3])[2] = away - at[2];
+                }
+                wanted.entry(proposed[y].0.clone()).or_insert([0.0; 3])[2] = reached - at[2];
                 changed = true;
                 if reported.insert((i, j)) {
                     events.push(DeconflictionEvent {
@@ -729,7 +820,19 @@ impl DeconflictStage {
                 break;
             }
         }
-        (wanted, events)
+        // Between the ground and a wire there may not be the room: the pair
+        // is as far apart as there is, and said to be short of it.
+        let short = conflicts
+            .iter()
+            .filter_map(|&(i, j, _)| {
+                let apart = (height(&wanted, i) - height(&wanted, j)).abs();
+                (apart < config.vertical_separation_m - 1e-9).then(|| Shortfall {
+                    pair: [proposed[i].0.clone(), proposed[j].0.clone()],
+                    apart_m: apart,
+                })
+            })
+            .collect();
+        (wanted, events, short)
     }
 
     /// One resolution, applied whole: the reference's stage 3.
@@ -1728,7 +1831,7 @@ mod tests {
                 .into_iter()
                 .map(|(id, x, y)| (id.to_string(), [x, y, 100.0], toward(x, y)))
                 .collect();
-        let (wanted, events) =
+        let (wanted, events, _) =
             stage.vertical_separation(&proposed, &std::collections::BTreeMap::new(), 0.0);
         assert_eq!(events.len(), 3, "every pair conflicts in plan: {events:?}");
         let height = |k: usize| proposed[k].1[2] + wanted.get(&proposed[k].0).map_or(0.0, |o| o[2]);
@@ -1741,5 +1844,168 @@ mod tests {
                 proposed[j].0
             );
         }
+    }
+
+    /// A wire along y at x = 0, 46 m up, as a self-built map holds it.
+    fn wire_map() -> crate::belief_world::BeliefHandle {
+        use argusnet_world::powerline::Support;
+        let support = |y: f64| Support {
+            xy_m: [0.0, y],
+            base_z_m: 45.0,
+            height_m: 1.0,
+        };
+        let wire = PowerLine {
+            id: "wire-track-0".into(),
+            supports: vec![support(-400.0), support(400.0)],
+            conductor_offsets_m: vec![0.0],
+            sag_ratio: 0.0,
+            conductor_radius_m: 0.015,
+            clearance_m: 10.0,
+        }
+        .validated()
+        .unwrap();
+        let mut grid = crate::belief_world::BeliefGrid::new(
+            argusnet_types::Bounds2d::new(-500.0, 500.0, -500.0, 500.0),
+            10.0,
+            0.0,
+        )
+        .unwrap();
+        grid.know_wires(vec![wire]);
+        crate::belief_world::BeliefHandle::new(
+            grid.snapshot(&crate::belief_world::ExplorationConfig::default()),
+        )
+    }
+
+    /// A yielder asked down toward a wire ahead (Montague City, seed 4451:
+    /// from the 62 m the height governor held to 53 m, 8 m from a wire) goes
+    /// no lower than clears it, and its peer climbs for the rest. Without a
+    /// map it is separated as it always was.
+    #[test]
+    fn a_yielder_is_not_sent_down_into_a_wire() {
+        let run = |known: bool| {
+            let mut stage = DeconflictStage::new();
+            stage.set_offset_ramp(Some(RAMP));
+            stage.set_separation_wires(known.then(|| SeparationWires {
+                config: crate::belief_world::WirePlanningConfig::default(),
+                map: wire_map(),
+            }));
+            // Both bound across the wire, 4 m apart in plan.
+            let pair = |a: f64, b: f64| -> Vec<(String, [f64; 3], [f64; 3])> {
+                [("a", 0.0, a), ("b", 4.0, b)]
+                    .into_iter()
+                    .map(|(id, y, z)| (id.to_string(), [-20.0, y, z], [10.0, 0.0, 0.0]))
+                    .collect()
+            };
+            let mut proposed = pair(62.0, 62.0);
+            let none = std::collections::BTreeMap::new();
+            let (_, events, _) = stage.vertical_separation(&proposed, &none, 0.0);
+            // The yielder the lower of the two: asked down.
+            let low = events[0].yielding_drone_id.clone();
+            for (id, at, _) in &mut proposed {
+                at[2] = if *id == low { 62.0 } else { 64.0 };
+            }
+            let (wanted, events, short) = stage.vertical_separation(&proposed, &none, 0.0);
+            assert_eq!(events.len(), 1);
+            assert_eq!(short, Vec::new());
+            let height = |id: &str| {
+                let at = proposed.iter().find(|(node, ..)| node == id).unwrap().1[2];
+                at + wanted.get(id).map_or(0.0, |offset| offset[2])
+            };
+            let peer = events[0].conflicting_drone_id.clone();
+            (height(&low), height(&peer), stage.config())
+        };
+        let (low, peer, config) = run(false);
+        assert!(low < 56.0, "unmapped, it goes down: {low}");
+        assert_eq!(peer, 64.0);
+        let (low, peer, _) = run(true);
+        assert!((56.0..=62.0).contains(&low), "clear over the wire: {low}");
+        assert!(
+            peer - low >= config.vertical_separation_m - 1e-9,
+            "{peer} over {low}"
+        );
+    }
+
+    /// Under a wire, over the ground: the yielder goes up to the wire's
+    /// ceiling, the peer down only to the height a yielder may be sent to,
+    /// and what is missing is said.
+    #[test]
+    fn a_peer_is_not_sent_below_its_floor_to_make_room_under_a_wire() {
+        #[derive(Debug)]
+        struct Flat;
+        impl crate::motion::TerrainSampler for Flat {
+            fn height_at(&self, _x_m: f64, _y_m: f64) -> f64 {
+                0.0
+            }
+            fn gradient_at(&self, _x_m: f64, _y_m: f64, _delta_m: Option<f64>) -> [f64; 2] {
+                [0.0, 0.0]
+            }
+            fn clamp_altitude(&self, _x_m: f64, _y_m: f64, z_m: f64, min_agl_m: f64) -> f64 {
+                z_m.max(min_agl_m)
+            }
+        }
+        let mut stage = DeconflictStage::new()
+            .with_roles(RoleTable::new().with_terrain(std::sync::Arc::new(Flat)));
+        stage.set_offset_ramp(Some(RAMP));
+        stage.set_separation_wires(Some(SeparationWires {
+            config: crate::belief_world::WirePlanningConfig::default(),
+            map: wire_map(),
+        }));
+        let config = stage.config();
+        let none = std::collections::BTreeMap::new();
+        let run = |peer_z: f64| {
+            let proposed: Vec<(String, [f64; 3], [f64; 3])> = [("a", 0.0), ("b", 4.0)]
+                .into_iter()
+                .map(|(id, y)| (id.to_string(), [-20.0, y, 24.0], [10.0, 0.0, 0.0]))
+                .collect();
+            let (_, events, _) = stage.vertical_separation(&proposed, &none, 0.0);
+            let peer = events[0].conflicting_drone_id.clone();
+            let proposed: Vec<_> = proposed
+                .into_iter()
+                .map(|(id, at, velocity)| {
+                    let z = if id == peer { peer_z } else { at[2] };
+                    (id, [at[0], at[1], z], velocity)
+                })
+                .collect();
+            let (wanted, _, short) = stage.vertical_separation(&proposed, &none, 0.0);
+            let offset = |id: &str| wanted.get(id).map_or(0.0, |offset| offset[2]);
+            let yielder = events[0].yielding_drone_id.clone();
+            (24.0 + offset(&yielder), peer_z + offset(&peer), short)
+        };
+        let (_, peer, short) = run(24.0);
+        assert_eq!(peer, config.min_agl_m, "down to the floor, no further");
+        assert_eq!(short.len(), 1, "{short:?}");
+        assert!(short[0].apart_m < config.vertical_separation_m);
+        // Already under its floor, it is not sent down, nor up at the other.
+        let (_, peer, _) = run(12.0);
+        assert_eq!(peer, 12.0);
+    }
+
+    /// The limits: over a wire ahead, a floor that is never above where the
+    /// platform was proposed; under it, a ceiling; away from it, neither.
+    #[test]
+    fn wire_limits_bound_only_what_flies_at_a_wire() {
+        let mut stage = DeconflictStage::new();
+        let east = [10.0, 0.0, 0.0];
+        assert_eq!(
+            stage.wire_limits([-20.0, 0.0, 62.0], east),
+            (f64::NEG_INFINITY, f64::INFINITY)
+        );
+        stage.set_separation_wires(Some(SeparationWires {
+            config: crate::belief_world::WirePlanningConfig::default(),
+            map: wire_map(),
+        }));
+        let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 62.0], east);
+        assert!((56.0..62.0).contains(&floor), "{floor}");
+        assert_eq!(ceiling, f64::INFINITY);
+        // Part way up: not asked to be over it already.
+        let (floor, _) = stage.wire_limits([-20.0, 0.0, 50.0], east);
+        assert_eq!(floor, 50.0);
+        let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 20.0], east);
+        assert_eq!(floor, f64::NEG_INFINITY);
+        assert!((20.0..=36.0).contains(&ceiling), "{ceiling}");
+        assert_eq!(
+            stage.wire_limits([-300.0, 0.0, 62.0], [-10.0, 0.0, 0.0]),
+            (f64::NEG_INFINITY, f64::INFINITY)
+        );
     }
 }

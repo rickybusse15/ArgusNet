@@ -471,7 +471,7 @@ impl BeliefMapping {
         let snapshot = match &self.config.quality {
             Some(requirement) => snapshot.with_quality(self.grid.quality(
                 requirement,
-                self.config.scan.range_noise_m,
+                self.config.per_return_sigma_m(),
                 tick,
                 self.dt_s,
             )),
@@ -523,6 +523,9 @@ impl MappingStage {
     ) -> crate::belief_world::BeliefHandle {
         if let Some(requirement) = &config.quality {
             grid.track_quality(requirement.max_incidence_deg);
+            if config.plane_heights {
+                grid.track_planes();
+            }
             let camera = config
                 .rig
                 .as_ref()

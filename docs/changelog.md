@@ -2,6 +2,21 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- A second real site: Montague City, Massachusetts (`tests/fixtures/real`), a
+  river village with 14 power lines and 55 m of relief. `field_v2` failed all three
+  tuning seeds flown there and was changed; it now qualifies on both sites, 15 of 15
+  unseen seeds each on one build, against the thresholds unchanged. See
+  `docs/performance/field-v2-qualification-2026-11-23.md`.
+  - Plane heights (`--plane-heights`, on in `field_v2`). A cell's height is a
+    plane's at its centre, not the mean of its returns wherever on a slope they
+    fell, and its claimed error is that plane's. On Montague City the map's
+    error over its claim went from 1.64–1.73 to 1.00–1.07.
+  - Separation keeps wires. A drone told to make room for another was sent down
+    to 8.2 m from a conductor its governor had kept it over. It now stops where
+    the wires believed ahead allow, and its peer makes up the rest.
+  - `over_wires` in the view planning profile (on in `field_v2`): a wire the
+    cruise height clears costs a leg nothing. A strip between two lines was
+    left unmapped long enough to hold a scan open past the run's end.
 - Return home on a lost sensor (F2). With `--fault-return`, a drone whose
   navigation camera stays out for 10 s, or mapping payload for 60 s, flies home
   over the believed surface, at 6 m/s with no camera. Before, a camera that
@@ -19,11 +34,10 @@
   for 4 cm. Without the flag nothing changes. See `docs/migration/IMAGING.md`.
 - Field profile v2. `--profile field_v2` is `field_v1` plus view planning, a
   4 cm image requirement, the map report and return home on a lost sensor.
-  Qualified on West Pleasant View: 15 of 15 unseen seeds pass every gate
-  (mission complete in 390 to 456 s, 97 to 99% of the map known, ground RMSE
-  0.10 to 0.11 m, nine in ten imaged cells at 3.6 cm or finer, conductors never
-  nearer than 17.3 m, drones never nearer each other than 22.6 m). One site,
-  assumed sensor models. `field_v1` is unchanged. See
+  Qualified on two sites, as above (mission complete in 355 to 461 s, 97 to 100%
+  of the map known, ground RMSE 0.09 to 0.17 m, nine in ten imaged cells at
+  3.6 cm or finer, conductors never nearer than 17.7 m, drones never nearer each
+  other than 20.0 m). Assumed sensor models. `field_v1` is unchanged. See
   `docs/migration/FIELD_PROFILE.md`.
 - View planning (SR5d). With a rig and a quality requirement,
   `--view-planning` sends explorers to the deficit worth most per watt-hour,

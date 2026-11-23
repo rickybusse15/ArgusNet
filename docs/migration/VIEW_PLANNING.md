@@ -73,6 +73,12 @@ Not every variant tried helped:
   worse still. It is off by default; enable it with `plan_pointing: true` in a
   profile once the LiDAR is chosen.
 
+## Wires it flies over
+
+`over_wires` (off by default, on in `field_v2`) charges a leg nothing for a wire
+the cruise height clears, and turns it out of no such corridor:
+[WIRE_CORRIDORS.md](WIRE_CORRIDORS.md).
+
 ## Not in this slice
 
 - Routing around believed obstacles on the way to a goal: legs are straight
