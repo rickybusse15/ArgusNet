@@ -76,6 +76,8 @@ enum Command {
     /// Build a scene package (`smartscene-v1`) from a replay, as
     /// `argusnet build-scene` does, with no Python.
     BuildScene(BuildSceneArgs),
+    /// What is remembered of a site between missions, and what has changed.
+    Site(SiteArgs),
     /// Run captured `IngestFrameRequest`s through the in-process fusion engine
     /// and write its `IngestFrameResponse`s -- the direct-fusion parity check
     /// against `argusnetd` (P4.9c).
@@ -93,6 +95,22 @@ struct BuildSceneArgs {
     /// A new or empty directory for the package.
     #[arg(long)]
     output: PathBuf,
+}
+
+#[derive(clap::Args)]
+struct SiteArgs {
+    /// The directory `sim --site-memory` keeps sites in.
+    #[arg(long)]
+    memory: PathBuf,
+    /// The site; without it, the sites held are listed.
+    #[arg(long)]
+    site: Option<String>,
+    /// Compare these two revisions, by hash, in place of the last two.
+    #[arg(long, num_args = 2, value_names = ["BEFORE", "AFTER"], requires = "site")]
+    compare: Option<Vec<String>>,
+    /// Write what changed as JSON.
+    #[arg(long, requires = "site")]
+    output: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -373,6 +391,14 @@ struct SimArgs {
     /// guard stops. Recorded in `meta.world_knowledge.exploration`.
     #[arg(long)]
     belief_flights: bool,
+    /// Keep the map the platforms built in this directory of sites, as the
+    /// next revision of `--site`, and say what differs from the last one (F6).
+    /// Needs a map with a quality requirement, as the profiles' are.
+    #[arg(long, requires = "site")]
+    site_memory: Option<PathBuf>,
+    /// The site the mission is flown at: up to 64 letters, digits, - and _.
+    #[arg(long, requires = "site_memory")]
+    site: Option<String>,
     /// Save the map the platforms built as a scene package in this (new or
     /// empty) directory, when the run ends: the measured ground and the
     /// believed structures as GLB, and the map itself. `argusnet-viewer
@@ -1008,6 +1034,138 @@ fn build(args: BuildArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The map as the next revision of a site, and what differs from the last.
+fn keep_site(
+    memory: &std::path::Path,
+    site: &str,
+    frame_id: Option<String>,
+    mission: serde_json::Value,
+    (grid, cells): (
+        argusnet_sim::site_memory::SiteGrid,
+        Vec<argusnet_sim::site_memory::SiteCell>,
+    ),
+) -> Result<String, String> {
+    use argusnet_sim::site_memory::{
+        compare, CompareConfig, SiteMemory, SiteRevision, REVISION_FORMAT, REVISION_VERSION,
+    };
+    let memory = SiteMemory::new(memory);
+    let last = memory.latest(site)?;
+    let revision = SiteRevision {
+        format: REVISION_FORMAT.into(),
+        version: REVISION_VERSION,
+        site_id: site.into(),
+        frame_id,
+        mission,
+        parent: last.as_ref().map(SiteRevision::hash),
+        grid,
+        cells,
+    };
+    // Compared first: a map that cannot be laid on the last is not kept as its
+    // successor.
+    let changes = match &last {
+        Some(last) => Some(compare(last, &revision, &CompareConfig::default())?),
+        None => None,
+    };
+    let hash = memory.add(&revision)?;
+    let known = revision.known_cells();
+    let Some(changes) = changes else {
+        return Ok(format!(
+            "site {site}: first revision {hash}, {known} cells known"
+        ));
+    };
+    let path = memory.write_changes(site, &changes)?;
+    Ok(format!(
+        "site {site}: revision {hash}, {known} cells known; {} changes in {} compared cells, \
+         {} undetermined -> {}",
+        changes.changes.len(),
+        changes.compared_cells,
+        changes.undetermined_cells,
+        path.display()
+    ))
+}
+
+fn site(args: SiteArgs) -> ExitCode {
+    match site_report(&args) {
+        Ok(text) => {
+            println!("{text}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => fail(EXIT_INVALID, error),
+    }
+}
+
+fn site_report(args: &SiteArgs) -> Result<String, String> {
+    use argusnet_sim::site_memory::{compare, CompareConfig, SiteMemory};
+    let memory = SiteMemory::new(&args.memory);
+    let Some(site) = &args.site else {
+        let mut lines = Vec::new();
+        for id in memory.sites()? {
+            lines.push(format!("{id}: {} revisions", memory.index(&id)?.len()));
+        }
+        return Ok(if lines.is_empty() {
+            "no sites".into()
+        } else {
+            lines.join("\n")
+        });
+    };
+    let index = memory.index(site)?;
+    let mut lines: Vec<String> = index
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} {} cells known, {}",
+                entry.hash, entry.known_cells, entry.mission
+            )
+        })
+        .collect();
+    let pair = match &args.compare {
+        Some(pair) => Some((pair[0].clone(), pair[1].clone())),
+        None => index
+            .len()
+            .checked_sub(2)
+            .map(|k| (index[k].hash.clone(), index[k + 1].hash.clone())),
+    };
+    let Some((before, after)) = pair else {
+        if args.output.is_some() {
+            return Err(format!("site {site} has no two revisions to compare"));
+        }
+        return Ok(if lines.is_empty() {
+            format!("site {site} is not held")
+        } else {
+            lines.join("\n")
+        });
+    };
+    let changes = compare(
+        &memory.read(site, &before)?,
+        &memory.read(site, &after)?,
+        &CompareConfig::default(),
+    )?;
+    for change in &changes.changes {
+        lines.push(format!(
+            "{:?}: {} cells at ({:.0}, {:.0}), {:+.1} m, {:.1} sigma at least",
+            change.change_type,
+            change.cells,
+            change.location_m[0],
+            change.location_m[1],
+            change.difference_m,
+            change.least_sigmas
+        ));
+    }
+    lines.push(format!(
+        "{} changes; {} cells compared, {} undetermined, {} known to one only",
+        changes.changes.len(),
+        changes.compared_cells,
+        changes.undetermined_cells,
+        changes.one_sided_cells
+    ));
+    if let Some(path) = &args.output {
+        let json = serde_json::to_string_pretty(&changes).map_err(|error| error.to_string())?;
+        std::fs::write(path, json + "\n")
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(lines.join("\n"))
+}
+
 fn sim(args: SimArgs) -> ExitCode {
     let started = Instant::now();
     let flag_rates = argusnet_sim::scheduler::LaneRates {
@@ -1040,6 +1198,12 @@ fn sim(args: SimArgs) -> ExitCode {
             "--explore chooses what search drones fly in a --world-knowledge none run; \
              a prior run always flies its lanes",
         );
+    }
+    // Refused before the run, not after it.
+    if let (Some(memory), Some(site)) = (&args.site_memory, &args.site) {
+        if let Err(error) = argusnet_sim::site_memory::SiteMemory::new(memory).latest(site) {
+            return fail(EXIT_INVALID, format!("--site-memory: {error}"));
+        }
     }
     if args.replan_routes
         && args
@@ -1526,6 +1690,8 @@ fn sim(args: SimArgs) -> ExitCode {
             );
         }
     }
+    // Read before the run is consumed; kept once the replay is whole.
+    let site_cells = run.site_cells();
     let replay_started = Instant::now();
     let replay = match run.run_to_replay() {
         Ok(replay) => replay,
@@ -1541,6 +1707,33 @@ fn sim(args: SimArgs) -> ExitCode {
         }
     }
     let replay_write_ms = replay_started.elapsed().as_secs_f64() * 1e3;
+    if let (Some(memory), Some(site)) = (&args.site_memory, &args.site) {
+        let Some(map) = site_cells else {
+            return fail(
+                EXIT_FAULT,
+                "--site-memory: the run keeps no map with a quality requirement",
+            );
+        };
+        let meta = &replay.meta.scenario;
+        let mission = serde_json::json!({
+            "scenario_name": &bundle.scenario_name,
+            "seed": bundle.seed,
+            "run_profile": meta.get("run_profile"),
+            "timestamp_s": replay.frames.last().map(|frame| frame.timestamp_s),
+        });
+        let frame_id = meta
+            .get("terrain_import")
+            .and_then(|import| import.get("georeference"))
+            .map(|georeference| georeference.to_string());
+        match keep_site(memory, site, frame_id, mission, map) {
+            Ok(summary) => {
+                if !args.quiet {
+                    println!("{summary}");
+                }
+            }
+            Err(error) => return fail(EXIT_FAULT, format!("site memory: {error}")),
+        }
+    }
     if let Some(dir) = &args.export_scene {
         let provenance = serde_json::json!({
             "producer": "argusnet-rs sim",
@@ -1690,6 +1883,7 @@ fn main() -> ExitCode {
         Command::Sim(args) => sim(args),
         Command::Build(args) => build(args),
         Command::BuildScene(args) => build_scene(args),
+        Command::Site(args) => site(args),
         Command::Fuse(args) => fuse(args),
         Command::Version => {
             println!(

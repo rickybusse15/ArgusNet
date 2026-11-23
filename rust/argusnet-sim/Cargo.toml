@@ -32,6 +32,8 @@ safety-engine = { path = "../safety-engine" }
 # conformance fixture the moment CI moved to a Mac. A version bump here can
 # move the draws, so it is pinned and the fixture guards it.
 libm = "=0.2.16"
+# Names a site revision by its content (F6).
+blake2.workspace = true
 # `serde`: a checkpoint carries each sensor's bias-drift stream position.
 rand_chacha = { version = "=0.10.0", features = ["serde"] }
 rand_core = "=0.10.1"

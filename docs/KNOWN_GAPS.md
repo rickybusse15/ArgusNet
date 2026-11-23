@@ -101,7 +101,7 @@ Status labels:
 | POI handoff, team assignment, rescoring | **Implemented** | `POIManager` and current sim wiring |
 | Inspection events | **Implemented** | `InspectionEvent` populated by mission-zone coverage/violation loop |
 | Exclusion-zone route/deconfliction handling | **Partial** | Current sim and deconfliction paths handle supported cases; full mission-executive hard gating remains future work. |
-| Evidence sets, reconstructions, change records | **Planned** | Contract exists in `INSPECTION.md`; no full runtime/index-backed evidence pipeline yet. |
+| Evidence sets, reconstructions, change records | **Partial** | Map revisions and changes between missions are kept ([SITE_MEMORY.md](migration/SITE_MEMORY.md)). No full runtime/index-backed evidence pipeline yet. |
 | Full closed-loop mission executive | **Planned** | `src/argusnet/mission/execution.py` is a foundation; `scan_map_inspect` is the current partial runtime bridge. |
 
 ## Planning, Coordination, And Safety
