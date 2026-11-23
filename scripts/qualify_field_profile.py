@@ -66,7 +66,28 @@ FIELD_V2_SEEDS = {
     "heldout": [9901, 9902, 9903, 9904, 9905],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
-PROFILE_SEEDS = {"field_v1": FIELD_V1_SEEDS, "field_v2": FIELD_V2_SEEDS}
+#: ``field_v3``: the first set, chosen before its campaign ran (2026-11-23).
+FIELD_V3_SEEDS = {
+    "qualification": [
+        111409,
+        112507,
+        113621,
+        114713,
+        115807,
+        116911,
+        118003,
+        119107,
+        120209,
+        121309,
+    ],
+    "heldout": [10101, 10102, 10103, 10104, 10105],
+    "tuning": [7, 42, 707, 1010, 9002, 4451, 13127],
+}
+PROFILE_SEEDS = {
+    "field_v1": FIELD_V1_SEEDS,
+    "field_v2": FIELD_V2_SEEDS,
+    "field_v3": FIELD_V3_SEEDS,
+}
 #: A site that has its own seeds, as ``(profile, site name)``. Montague City's
 #: second set, chosen before any of it was run (2026-11-23). The first
 #: (67421..77339, held out 9701..9705) failed on one seed, 74027, whose scan was
@@ -88,6 +109,23 @@ SITE_SEEDS = {
         ],
         "heldout": [10001, 10002, 10003, 10004, 10005],
         "tuning": [*FIELD_V2_SEEDS["tuning"], 74027],
+    },
+    # Its own, chosen before any of it was run (2026-11-23).
+    ("field_v3", "montague_city"): {
+        "qualification": [
+            122401,
+            123503,
+            124601,
+            125707,
+            126809,
+            127903,
+            129001,
+            130107,
+            131203,
+            132301,
+        ],
+        "heldout": [10201, 10202, 10203, 10204, 10205],
+        "tuning": FIELD_V3_SEEDS["tuning"],
     },
 }
 
