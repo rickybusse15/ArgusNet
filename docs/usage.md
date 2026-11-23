@@ -335,7 +335,9 @@ cargo run -p argusnet-viewer -- --run runs/site/scenario.json --profile field_v1
 
 `--profile field_v2` adds view planning to it (explorers go to the deficit
 worth most per watt-hour) and imaging: the pod's cameras are modelled and every
-cell is asked for an image of 4 cm a pixel or finer. It is not yet qualified.
+cell is asked for an image of 4 cm a pixel or finer. It also writes the map
+report and brings a drone home when it loses a sensor. See its
+[qualification](performance/field-v2-qualification-2026-11-22.md).
 
 A config run this way is built for platforms that do not know the world
 (`blind_setup`). See [FIELD_PROFILE.md](migration/FIELD_PROFILE.md) for what

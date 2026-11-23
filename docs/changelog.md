@@ -17,11 +17,13 @@
   A quality requirement may ask for `max_image_gsd_m`, which lowers and slows
   the flight; cells lacking only that are `image_coarse_cells`. `field_v2` asks
   for 4 cm. Without the flag nothing changes. See `docs/migration/IMAGING.md`.
-- Field profile v2 (in progress). `--profile field_v2` is `field_v1` plus
-  view planning and imaging. With view planning alone, on West Pleasant View, over the eight seeds `field_v1` was
-  tuned on, it passes every `field_v1` gate and completes the mission 9% to
-  36% sooner (median 19%). Not qualified: its thresholds are a draft and no
-  campaign has run. `field_v1` is unchanged, byte for byte. See
+- Field profile v2. `--profile field_v2` is `field_v1` plus view planning, a
+  4 cm image requirement, the map report and return home on a lost sensor.
+  Qualified on West Pleasant View: 15 of 15 unseen seeds pass every gate
+  (mission complete in 390 to 456 s, 97 to 99% of the map known, ground RMSE
+  0.10 to 0.11 m, nine in ten imaged cells at 3.6 cm or finer, conductors never
+  nearer than 17.3 m, drones never nearer each other than 22.6 m). One site,
+  assumed sensor models. `field_v1` is unchanged. See
   `docs/migration/FIELD_PROFILE.md`.
 - View planning (SR5d). With a rig and a quality requirement,
   `--view-planning` sends explorers to the deficit worth most per watt-hour,

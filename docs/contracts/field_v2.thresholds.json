@@ -2,8 +2,8 @@
   "format": "argusnet.profile-thresholds",
   "version": 1,
   "profile": "field_v2",
-  "frozen": "DRAFT",
-  "basis": "DRAFT copy of field_v1 while field_v2 is composed; frozen before its qualification seeds are run.",
+  "frozen": "2026-11-22",
+  "basis": "field_v1's gates, unchanged, and three on what field_v2 adds. Declared before the first field_v2 qualification seed was run. The eight seeds field_v2 was composed on (7, 42, 707, 1010, 4451, 9002, 9005, 13127) are tuning seeds, never qualification evidence; the new bounds were set with two of them (7 and 4451) in view.",
   "per_run": {
     "mission_complete": {
       "equals": true,
@@ -31,7 +31,7 @@
     },
     "quality_met_fraction": {
       "min": 0.9,
-      "why": "Share of map cells meeting the profile's declared map requirement; the scan gate itself."
+      "why": "Share of map cells meeting the profile's declared map requirement, its 4 cm image included; the scan gate itself."
     },
     "structure_recall": {
       "min": 0.9,
@@ -44,6 +44,18 @@
     "ground_rmse_m": {
       "max": 1.0,
       "why": "Measured ground against the true ground, over known cells."
+    },
+    "map_error_over_claim": {
+      "max": 1.5,
+      "why": "RMS of the map's true error over the sigma it claims (meta.map_report): a map that claims much more than it knows cannot be planned on."
+    },
+    "map_error_within_2_sigma": {
+      "min": 0.88,
+      "why": "Share of cells whose true error is within two of their claimed sigma."
+    },
+    "image_gsd_p90_m": {
+      "max": 0.04,
+      "why": "Nine in ten imaged cells have an image as fine as the requirement."
     },
     "wire_clearance_min_m": {
       "min": 10.0,
