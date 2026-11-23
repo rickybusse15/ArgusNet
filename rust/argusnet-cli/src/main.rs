@@ -348,6 +348,11 @@ struct SimArgs {
     /// Every number is assumed.
     #[arg(long)]
     navigation: Option<String>,
+    /// With a profile that routes mission flights in three dimensions
+    /// (`field_v3`), plan a flight again when something newly mapped lies
+    /// across its way. The replay's profile id gains `+replan`.
+    #[arg(long)]
+    replan_routes: bool,
     /// The imaging model's parameters as JSON (`ImagingConfig`), instead of
     /// the assumed default. Implies `--imaging`.
     #[arg(long)]
@@ -710,6 +715,15 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             exploration: profile.options().exploration.map(|exploration| {
                 argusnet_sim::belief_world::ExplorationConfig {
                     navigation: navigation.or(exploration.navigation),
+                    route_3d: exploration.route_3d.map(|route| {
+                        argusnet_planning::route3d::Route3dConfig {
+                            replan: args
+                                .replan_routes
+                                .then(argusnet_planning::route3d::ReplanConfig::default)
+                                .or(route.replan),
+                            ..route
+                        }
+                    }),
                     ..exploration
                 }
             }),
@@ -1025,6 +1039,18 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--explore chooses what search drones fly in a --world-knowledge none run; \
              a prior run always flies its lanes",
+        );
+    }
+    if args.replan_routes
+        && args
+            .profile
+            .and_then(|profile| profile.options().exploration)
+            .and_then(|exploration| exploration.route_3d)
+            .is_none()
+    {
+        return fail(
+            EXIT_UNSUPPORTED,
+            "--replan-routes needs a profile that routes flights in three dimensions",
         );
     }
     if args.navigation.is_some()

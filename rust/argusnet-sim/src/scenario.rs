@@ -2221,6 +2221,7 @@ impl AssembledRun {
             .as_ref()
             .and_then(|fault_return| fault_return.lost_position.as_ref())
             .map(|lost| lost.hold_sigma_m);
+        let job_workers = self.observe().compute_workers();
         let separation_surface = config.separation_surface;
         let flown_handovers = config.flown_handovers;
         let wire_planning = wire_planning_config;
@@ -2266,7 +2267,8 @@ impl AssembledRun {
                     surface,
                     wires: route_wires,
                 },
-            ));
+            ))?;
+            driver.set_job_workers(job_workers)?;
             driver.end_when_all_home(config.end_when_all_home);
             if let Some(flights) = &mission_flights {
                 // Each POI's height over the ground: declared by the

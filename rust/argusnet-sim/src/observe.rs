@@ -1014,6 +1014,11 @@ impl ObserveStage {
         self.state.sensors.get(node_id).copied()
     }
 
+    /// How many workers the session has.
+    pub fn compute_workers(&self) -> usize {
+        self.compute.workers()
+    }
+
     /// The session's workers for the pair evaluations (B3). The output is
     /// the same at every worker count.
     pub fn set_compute(&mut self, compute: std::sync::Arc<crate::compute::ComputePool>) {

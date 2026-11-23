@@ -25,11 +25,13 @@
 //! [`RUST_RUNTIME_ARCHITECTURE.md`]: ../../../../docs/RUST_RUNTIME_ARCHITECTURE.md
 
 mod executor;
+mod jobs;
 mod lanes;
 mod queue;
 mod time;
 
 pub use executor::{ExecutorError, LaneTask, LegacyLaneExecutor, LEGACY_LANE};
+pub use jobs::{Done, JobBoard, JobState, Refused};
 pub use lanes::{
     describe, parse_rate, rate_text, Lane, LanePart, LaneRates, PhasedLaneExecutor, PhasedTick,
     LANES_V1, RATED_LANES,
