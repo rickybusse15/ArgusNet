@@ -9,6 +9,7 @@ pub mod frontier;
 pub mod planner;
 pub mod poi;
 pub mod route;
+pub mod views;
 
 pub use battery::{BatteryModel, BatteryState};
 pub use route::{astar_path, build_visibility_graph, smooth_path, RouteConfig};

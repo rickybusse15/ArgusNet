@@ -120,14 +120,18 @@ pub enum RunProfile {
     /// believed surface; energy charged as flown with contingency
     /// planning; and a declared map requirement the scan must meet.
     FieldV1,
+    /// [`RunProfile::FieldV1`] with view planning (SR5d): explorers cruise
+    /// to the deficit worth most per watt-hour instead of the nearest.
+    FieldV2,
 }
 
 impl RunProfile {
-    pub const ALL: [RunProfile; 1] = [RunProfile::FieldV1];
+    pub const ALL: [RunProfile; 2] = [RunProfile::FieldV1, RunProfile::FieldV2];
 
     pub fn as_str(self) -> &'static str {
         match self {
             RunProfile::FieldV1 => "field_v1",
+            RunProfile::FieldV2 => "field_v2",
         }
     }
 
@@ -147,6 +151,7 @@ impl RunProfile {
     pub fn options(self) -> RunOptions {
         match self {
             RunProfile::FieldV1 => RunOptions::field_v1(),
+            RunProfile::FieldV2 => RunOptions::field_v2(),
         }
     }
 }
@@ -197,6 +202,15 @@ impl RunOptions {
             profile: Some(RunProfile::FieldV1),
             ..Self::default()
         }
+    }
+
+    /// [`RunProfile::FieldV2`]'s options: `field_v1`, and what it adds.
+    pub fn field_v2() -> Self {
+        let mut options = Self::field_v1();
+        let exploration = options.exploration.as_mut().expect("field_v1 explores");
+        exploration.view_planning = Some(argusnet_planning::views::ViewPlanningConfig::default());
+        options.profile = Some(RunProfile::FieldV2);
+        options
     }
 
     /// Install the options on `run`, assembled from `bundle`, and record what
