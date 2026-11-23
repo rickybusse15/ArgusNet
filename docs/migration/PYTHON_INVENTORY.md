@@ -48,13 +48,15 @@ imported by nothing in `src`, `tests`, `scripts` or the packaging: `ui` (all of 
 
 ## Analysis without the native library
 
-`tests/test_import_without_native.py` imports every module of `cli`, `core`,
-`evaluation`, `mapping`, `mission`, `planning`, `security` and `world`, each first and on
-its own, with the native library refused. All do: it is loaded by the first call into
-it. Three did not import first, native or not (`world.obstacles`, `world.visibility`,
-`world.environment_io`): they and `world.environment` import each other, and only an
-import that happened to start at `environment` closed the circle. The package starts
-there now.
+`tests/test_import_without_native.py` imports every module of every package (but the
+generated gRPC stubs), each first and on its own, where the loader can find no native
+library, and checks that it cannot. Two modules called into it as they were imported
+(`world.visibility`'s profile and `safety.native`'s limits, and so everything that
+imports them); those defaults are asked for when a model is made now, and are Rust's as
+before. Three did not import first, native or not (`world.obstacles`,
+`world.visibility`, `world.environment_io`): they and `world.environment` import each
+other, and only an import that happened to start at `environment` closed the circle.
+The package starts there now.
 
 Not done: an install that skips building Rust (P6.1's extra), `argusnet-analysis` and
 the command table (P6.2), and everything in P6.3 and P6.4.

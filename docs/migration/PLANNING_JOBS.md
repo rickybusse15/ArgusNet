@@ -31,7 +31,9 @@ A mission flight whose way was open when it was set is watched. Every `check_s`
 routes). One that something newly mapped lies across is planned again on that map,
 as a job due `latency_s` (0.5 s) later. It is flown only if the drone is still on
 that flight and the way is open on the map as it is *then*. A flight set anew or
-dropped cancels its job. Each landing is a `route_replanned` decision.
+dropped cancels its job. One that would cross a wire the map was *given* is not flown
+(the router's air holds only those it measured), and what is flown is told apart from
+the run's other departures, as any flight set out on is. Each landing is a `route_replanned` decision.
 
 ## Measured (2026-11-23)
 

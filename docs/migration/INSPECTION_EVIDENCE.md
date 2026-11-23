@@ -26,7 +26,8 @@ replay ends with `meta.inspection_evidence`.
 
 A viewpoint is chosen on the drones' own map. Whether a view from it *shows* the point
 is asked of the image taken there. Here that is the true world, as an image would be:
-a ray from where the drone is to the point. A view that shows nothing is not counted,
+a ray from where the drone is to the point. Range, elevation and the way round are the
+image's too, from where it was taken and not from where the drone believes it was. A view that shows nothing is not counted,
 and that place is not tried again.
 
 ## Measured (2026-11-23)
@@ -55,7 +56,7 @@ It costs about 20 to 60 s a mission, so it is not in `field_v3`, whose runs are 
 
 ## Tests
 
-`evidence.rs` (7): all round, a view that shows nothing, seen from one side only, out
+`evidence.rs` (9): all round, a view judged from where it was taken, a hold of one stay, a view that shows nothing, seen from one side only, out
 of time, no fleet, sharing, a requirement nothing could meet.
 `tests/field_v3.rs`: the composed mission settles every point and resumes exactly on
 the way to a viewpoint, at two points.

@@ -3862,14 +3862,17 @@ impl PhysicalGuard {
             || self.wires.iter().any(|wire| wire.contains(p))
     }
 
-    /// Whether an image `node_id` takes where it believes it is would show
-    /// `point_m`: nothing of the world between where it is and there. The last
-    /// metre and a half is the thing itself.
-    pub fn sees(&self, node_id: &str, believed_m: [f64; 3], point_m: [f64; 3]) -> bool {
+    /// Where `node_id` is while it believes it is at `believed_m`.
+    pub fn true_position_m(&self, node_id: &str, believed_m: [f64; 3]) -> [f64; 3] {
+        let off = self.off_m(node_id, believed_m);
+        std::array::from_fn(|k| believed_m[k] + off[k])
+    }
+
+    /// Whether an image taken at `from` would show `point_m`: nothing of the world
+    /// between. The last metre and a half is the thing itself.
+    pub fn sees(&self, from: [f64; 3], point_m: [f64; 3]) -> bool {
         const OF_ITSELF_M: f64 = 1.5;
         const STEP_M: f64 = 0.5;
-        let off = self.off_m(node_id, believed_m);
-        let from: [f64; 3] = std::array::from_fn(|k| believed_m[k] + off[k]);
         let d: [f64; 3] = std::array::from_fn(|k| point_m[k] - from[k]);
         let length = d.iter().map(|v| v * v).sum::<f64>().sqrt();
         let steps = ((length - OF_ITSELF_M) / STEP_M).floor().max(0.0) as usize;

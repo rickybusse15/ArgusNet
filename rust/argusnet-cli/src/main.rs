@@ -1078,25 +1078,26 @@ fn keep_site(
         compare, CompareConfig, SiteMemory, SiteRevision, REVISION_FORMAT, REVISION_VERSION,
     };
     let memory = SiteMemory::new(memory);
-    let last = memory.latest(site)?;
-    let revision = SiteRevision {
-        format: REVISION_FORMAT.into(),
-        version: REVISION_VERSION,
-        site_id: site.into(),
-        frame_id,
-        mission,
-        parent: last.as_ref().map(SiteRevision::hash),
-        grid,
-        cells,
-    };
-    // Compared first: a map that cannot be laid on the last is not kept as its
-    // successor.
-    let changes = match &last {
-        Some(last) => Some(compare(last, &revision, &CompareConfig::default())?),
-        None => None,
-    };
-    let hash = memory.add(&revision)?;
-    let known = revision.known_cells();
+    let (hash, (changes, known)) = memory.append(site, |last| {
+        let revision = SiteRevision {
+            format: REVISION_FORMAT.into(),
+            version: REVISION_VERSION,
+            site_id: site.into(),
+            frame_id,
+            mission,
+            parent: last.map(SiteRevision::hash),
+            grid,
+            cells,
+        };
+        // Compared first: a map that cannot be laid on the last is not kept as
+        // its successor.
+        let changes = match last {
+            Some(last) => Some(compare(last, &revision, &CompareConfig::default())?),
+            None => None,
+        };
+        let known = revision.known_cells();
+        Ok((revision, (changes, known)))
+    })?;
     let Some(changes) = changes else {
         return Ok(format!(
             "site {site}: first revision {hash}, {known} cells known"
@@ -1793,10 +1794,11 @@ fn sim(args: SimArgs) -> ExitCode {
             "run_profile": meta.get("run_profile"),
             "timestamp_s": replay.frames.last().map(|frame| frame.timestamp_s),
         });
-        let frame_id = meta
-            .get("terrain_import")
-            .and_then(|import| import.get("georeference"))
-            .map(|georeference| georeference.to_string());
+        // Where the world's coordinates are from, whichever of its layers set
+        // it: terrain, buildings or features.
+        let frame_id = meta.get("enu_origin").map(|origin| {
+            serde_json::json!({ "crs_id": meta.get("crs_id"), "enu_origin": origin }).to_string()
+        });
         match keep_site(memory, site, frame_id, mission, map) {
             Ok(summary) => {
                 if !args.quiet {

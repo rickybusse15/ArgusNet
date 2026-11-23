@@ -65,6 +65,31 @@ fn two_missions_of_one_site_are_kept_and_compared() {
     assert_eq!(document["changes"], serde_json::json!([]));
     assert!(document["compared_cells"].as_u64().unwrap() > 100);
 
+    // The same grid about another place on the earth is another frame: a world
+    // whose buildings or features, and not terrain, say where it is, too.
+    let mut moved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&bundle).unwrap()).unwrap();
+    let origin = &mut moved["presentation"]["enu_origin"];
+    assert!(origin.is_object(), "the bundle says where it is");
+    origin["latitude_deg"] = serde_json::json!(12.5);
+    assert!(moved.get("terrain_import").is_none());
+    std::fs::write(root.join("moved.json"), moved.to_string()).unwrap();
+    let elsewhere = cli(&[
+        "sim",
+        "--bundle",
+        &path("moved.json"),
+        "--replay",
+        &replay,
+        "--profile",
+        "field_v3",
+        "--site-memory",
+        &memory,
+        "--site",
+        "hills",
+    ]);
+    assert!(!elsewhere.status.success());
+    assert!(text(&elsewhere).contains("two sites are not compared"));
+
     // A run that keeps no such map remembers nothing, and says so.
     let refused = sim(&[]);
     assert!(!refused.status.success());

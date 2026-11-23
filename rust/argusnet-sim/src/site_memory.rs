@@ -221,10 +221,58 @@ impl SiteMemory {
         }
     }
 
-    /// Keep `revision`, which must follow the last one. Its file is written
-    /// whole before the index names it, so a stop between leaves the site as it
-    /// was.
+    /// Hold `site_id` against every other process, and any other handle in this
+    /// one, until what is returned is dropped. Given up on after a minute: what
+    /// holds it has stopped, or is not doing what this one does.
+    fn lock(&self, site_id: &str) -> Result<std::fs::File, String> {
+        const PATIENCE: std::time::Duration = std::time::Duration::from_secs(60);
+        let dir = self.site_dir(site_id)?;
+        std::fs::create_dir_all(&dir).map_err(|e| at(&dir, e))?;
+        let path = dir.join("lock");
+        let file = std::fs::File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|e| at(&path, e))?;
+        let started = std::time::Instant::now();
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(file),
+                Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < PATIENCE => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(error) => return Err(at(&path, error)),
+            }
+        }
+    }
+
+    /// Keep `revision`, which must follow the last one.
     pub fn add(&self, revision: &SiteRevision) -> Result<String, String> {
+        let _held = self.lock(&revision.site_id)?;
+        self.add_held(revision)
+    }
+
+    /// Keep the revision `next` makes of the last one, with the site held from
+    /// reading the last to naming the new: one that finishes meanwhile is the
+    /// last the other sees, and neither is lost. Returns its hash and what `next`
+    /// made beside it.
+    pub fn append<T>(
+        &self,
+        site_id: &str,
+        next: impl FnOnce(Option<&SiteRevision>) -> Result<(SiteRevision, T), String>,
+    ) -> Result<(String, T), String> {
+        let _held = self.lock(site_id)?;
+        let (revision, beside) = next(self.latest(site_id)?.as_ref())?;
+        if revision.site_id != site_id {
+            return Err(format!("a revision of {}, not {site_id}", revision.site_id));
+        }
+        Ok((self.add_held(&revision)?, beside))
+    }
+
+    /// With the site held. Its file is written whole before the index names it,
+    /// so a stop between leaves the site as it was.
+    fn add_held(&self, revision: &SiteRevision) -> Result<String, String> {
         revision.validate()?;
         let dir = self.site_dir(&revision.site_id)?;
         let mut index = self.index(&revision.site_id)?;
@@ -277,7 +325,8 @@ fn at(path: &Path, error: impl std::fmt::Display) -> String {
 }
 
 fn write_whole(path: &Path, text: &str) -> Result<(), String> {
-    let part = path.with_extension("part");
+    // Its own, whatever else is writing.
+    let part = path.with_extension(format!("{}.part", std::process::id()));
     std::fs::write(&part, text).map_err(|e| at(&part, e))?;
     std::fs::rename(&part, path).map_err(|e| at(path, e))
 }
@@ -810,6 +859,44 @@ mod tests {
             assert!(memory.latest(id).is_err(), "{id:?}");
         }
         assert!(memory.read("site", "../index").is_err());
+        std::fs::remove_dir_all(&memory.root).unwrap();
+    }
+
+    /// Missions that finish together are all kept, each after another: from as
+    /// many handles at once, none is written over.
+    #[test]
+    fn missions_that_finish_together_are_all_kept() {
+        let memory = memory("together");
+        const MISSIONS: usize = 8;
+        std::thread::scope(|scope| {
+            for seed in 0..MISSIONS {
+                let memory = SiteMemory::new(memory.root.clone());
+                scope.spawn(move || {
+                    memory
+                        .append("site", |last| {
+                            let mut revision = flat(last.map(SiteRevision::hash));
+                            revision.mission = serde_json::json!({ "seed": seed });
+                            // Long enough that they overlap.
+                            std::thread::sleep(std::time::Duration::from_millis(15));
+                            Ok((revision, ()))
+                        })
+                        .unwrap();
+                });
+            }
+        });
+        let index = memory.index("site").unwrap();
+        assert_eq!(index.len(), MISSIONS);
+        for (k, entry) in index.iter().enumerate() {
+            let before = k.checked_sub(1).map(|k| index[k].hash.clone());
+            assert_eq!(entry.parent, before);
+            memory.read("site", &entry.hash).unwrap();
+        }
+        let mut seeds: Vec<u64> = index
+            .iter()
+            .map(|entry| entry.mission["seed"].as_u64().unwrap())
+            .collect();
+        seeds.sort_unstable();
+        assert_eq!(seeds, (0..MISSIONS as u64).collect::<Vec<_>>());
         std::fs::remove_dir_all(&memory.root).unwrap();
     }
 

@@ -62,7 +62,7 @@ With `fault_return.lost_position` (on in `field_v3`) a drone that knows where it
 is to worse than `hold_sigma_m` (5 m, half a cell: past it a capture is refused,
 so flying on maps nothing) brakes to a hold where it believes it is, above what
 may be there, as one whose navigation camera is out does. It goes on when it
-knows again. `home_after_s` (240 s) after its last fix it goes home for good, at
+knows again. One that has never had a fix is lost from the first. `home_after_s` (240 s) after its last fix it goes home for good, at
 the blind speed. A drone let go from a hold is flown back to where its
 controller ran on to while it held, at 1.25 times the speed asked; before, it
 was put there, up to three steps in one tick (the camera's hold did the same).
