@@ -266,6 +266,10 @@ struct DriverCheckpoint {
     /// Flying on for the map (`follow_up`). Absent until it starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     follow_up: Option<FollowUp>,
+    /// Its flights under way and the planning of them pending. Absent without
+    /// replanning, and until a flight is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reroute: Option<crate::reroute::RerouteState>,
 }
 
 /// How a follow up is going: when it started, how many cells met the
@@ -438,6 +442,8 @@ pub struct MissionDriverStage {
     follow_up: Option<FollowUp>,
     /// What mission flights are routed through in three dimensions.
     route_air: Option<crate::route_air::RouteAir>,
+    /// Plans its flights again when the map closes their ways.
+    rerouter: Option<crate::reroute::Rerouter>,
     /// Whether a scan with every drone homeward is over.
     ends_when_all_home: bool,
     /// Drones sweeping a hole in the coverage map under efficient_v1 (P4),
@@ -1236,6 +1242,7 @@ impl MissionDriverStage {
             follow_up_config: None,
             follow_up: None,
             route_air: None,
+            rerouter: None,
             ends_when_all_home: false,
             gap_fill: BTreeMap::new(),
             rescored: false,
@@ -2549,8 +2556,91 @@ impl MissionDriverStage {
 
     /// Route mission flights in three dimensions over the map they build.
     /// Before the first tick.
-    pub fn set_route_air(&mut self, air: Option<crate::route_air::RouteAir>) {
+    pub fn set_route_air(&mut self, air: Option<crate::route_air::RouteAir>) -> Result<(), String> {
+        self.rerouter = match &air {
+            Some(air) => crate::reroute::Rerouter::new(air, 1)?,
+            None => None,
+        };
         self.route_air = air;
+        Ok(())
+    }
+
+    /// The threads its planning jobs have. Before the first tick. Changes
+    /// nothing a run does.
+    pub fn set_job_workers(&mut self, workers: usize) -> Result<(), String> {
+        match &mut self.rerouter {
+            Some(rerouter) => rerouter.set_workers(workers),
+            None => Ok(()),
+        }
+    }
+
+    /// Fly again, round it, what the map has put something across; and look at
+    /// the flights this run has set.
+    fn replan_flights(
+        &mut self,
+        tick: u64,
+        dt_s: f64,
+        timestamp_s: f64,
+        mobile: &[(String, [f64; 3])],
+    ) {
+        let Some(mut rerouter) = self.rerouter.take() else {
+            return;
+        };
+        for command in &self.override_commands {
+            rerouter.note(command, tick);
+        }
+        for landed in rerouter.run(tick, dt_s, mobile, &self.route_model) {
+            let at = mobile
+                .iter()
+                .find(|(id, _)| *id == landed.drone)
+                .map(|(_, at)| *at)
+                .expect("a job lands for a drone that is there");
+            let flight = landed
+                .outcome
+                .flight(at, timestamp_s, self.config.redirect_speed_mps);
+            let command = match (&landed.outcome, flight) {
+                (crate::reroute::Outcome::Reroute { kind, .. }, Some(flight)) => Some(match kind {
+                    crate::reroute::FlightKind::Poi => {
+                        OverrideCommand::SetPoi(landed.drone.clone(), flight)
+                    }
+                    crate::reroute::FlightKind::Egress => {
+                        OverrideCommand::SetEgress(landed.drone.clone(), flight)
+                    }
+                }),
+                _ => None,
+            };
+            self.decisions.push(Decision {
+                kind: "route_replanned",
+                status: if command.is_some() {
+                    DecisionStatus::QueuedForNextTick
+                } else {
+                    DecisionStatus::Rejected
+                },
+                subject: Some(landed.drone.clone()),
+                selected: None,
+                candidates: Vec::new(),
+                reason: landed.outcome.reason(),
+                detail: format!(
+                    "{}: something mapped since it set out lies across its way; planned again \
+                     on tick {}",
+                    landed.drone, landed.submitted_tick
+                ),
+                inputs: serde_json::json!({
+                    "position_m": at,
+                    "submitted_tick": landed.submitted_tick,
+                }),
+                command: match &command {
+                    Some(OverrideCommand::SetPoi(..)) => Some("set_poi"),
+                    Some(_) => Some("set_egress"),
+                    None => None,
+                },
+            });
+            if let Some(command) = command {
+                rerouter.note(&command, tick);
+                self.override_commands.push(command);
+            }
+        }
+        self.rerouter = Some(rerouter);
     }
 
     /// End a scan whose every drone is homeward for good. Before the first
@@ -4152,6 +4242,7 @@ impl StageHandler for MissionDriverStage {
         }
         self.publish_report();
         self.stagger_departures();
+        self.replan_flights(context.tick, context.dt_s, timestamp_s, &mobile);
         Ok(outcome)
     }
 
@@ -4173,6 +4264,7 @@ impl StageHandler for MissionDriverStage {
             mapped_fit: self.mapped_fit,
             unassigned: self.unassigned.clone(),
             follow_up: self.follow_up.clone(),
+            reroute: self.rerouter.as_ref().and_then(|r| r.state()),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -4199,6 +4291,17 @@ impl StageHandler for MissionDriverStage {
                 ),
             });
         }
+        match (&self.rerouter, &decoded.reroute) {
+            (Some(rerouter), Some(state)) => rerouter
+                .check(state)
+                .map_err(|detail| crate::simulation::StageStateError::Malformed { detail })?,
+            (None, Some(_)) => {
+                return Err(crate::simulation::StageStateError::Malformed {
+                    detail: "the checkpoint replans flights, this run does not".into(),
+                });
+            }
+            (_, None) => {}
+        }
         Ok(())
     }
 
@@ -4219,6 +4322,12 @@ impl StageHandler for MissionDriverStage {
         self.mapped_fit = decoded.mapped_fit;
         self.unassigned = decoded.unassigned;
         self.follow_up = decoded.follow_up;
+        if let Some(rerouter) = &mut self.rerouter {
+            rerouter.reset();
+            if let Some(state) = decoded.reroute {
+                rerouter.restore(state);
+            }
+        }
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -4273,6 +4382,9 @@ impl StageHandler for MissionDriverStage {
         self.mapped_wires = 0;
         self.mapped_fit = 0;
         self.follow_up = None;
+        if let Some(rerouter) = &mut self.rerouter {
+            rerouter.reset();
+        }
         self.unassigned.clear();
         self.override_commands.clear();
         self.decisions.clear();
@@ -5953,16 +6065,18 @@ mod tests {
             let map = BeliefHandle::new(grid.snapshot(&config));
             stage.set_mapped_power_lines(Some(map.clone()), bounds);
             stage.follow_mapped_wires();
-            stage.set_route_air(Some(crate::route_air::RouteAir {
-                // Whatever a route saves.
-                config: argusnet_planning::route3d::Route3dConfig {
-                    min_saving: -10.0,
-                    ..Default::default()
-                },
-                map,
-                surface: Default::default(),
-                wires: Some(Default::default()),
-            }));
+            stage
+                .set_route_air(Some(crate::route_air::RouteAir {
+                    // Whatever a route saves.
+                    config: argusnet_planning::route3d::Route3dConfig {
+                        min_saving: -10.0,
+                        ..Default::default()
+                    },
+                    map,
+                    surface: Default::default(),
+                    wires: Some(Default::default()),
+                }))
+                .unwrap();
             stage.decisions.clear();
             stage.replan_egress_for_wires(&mobile, MissionPhase::Inspecting, 5.0);
             let commands = stage.take_override_commands();

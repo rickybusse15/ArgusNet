@@ -65,7 +65,8 @@ passed at 12.7 and 16.5 m, governed but close; they are 23.7 and 20.0 m.
 ## What it does not do
 
 - The allocator still prices a trip by the plan route, not by this one.
-- It plans once, when a flight starts, on the map as it is then.
+- It plans once, when a flight starts, on the map as it is then, unless it is asked
+  to plan again as the map changes ([PLANNING_JOBS.md](PLANNING_JOBS.md)).
 - Explorers keep their own heights; only mission flights are routed.
 - It does not trade energy against time.
 - The gradient limit is the same up and down, and the aircraft's own lag is not

@@ -2,6 +2,9 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Planning jobs (P4.10d, P4.10e first slices): bounded work applied at a declared
+  tick whatever the workers, checkpointed while pending. `--replan-routes` plans a
+  mission flight again when the map closes its way (`docs/migration/PLANNING_JOBS.md`).
 - `--profile field_v3`: `field_v2` on estimated positions, with cells placed to
   0.5 m, a lost drone's hold and return, and separation over the believed
   surface. It qualifies on two sites, 15 of 15 unseen seeds each

@@ -37,6 +37,7 @@ pub mod pod;
 pub mod pursuit;
 pub mod range_scan;
 pub mod replay;
+pub mod reroute;
 pub mod rig;
 pub mod route_air;
 pub mod run_options;

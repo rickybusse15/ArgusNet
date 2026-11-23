@@ -69,6 +69,32 @@ pub struct Route3dConfig {
     /// meets. One whose straight flight meets a wire is flown if it costs no
     /// more: there a governor has only what it sees coming.
     pub min_saving: f64,
+    /// Plan a flight again when the map closes its way. Absent plans it once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replan: Option<ReplanConfig>,
+}
+
+/// When a flight under way is planned again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplanConfig {
+    /// Seconds between looks at the way a flight has left.
+    pub check_s: f64,
+    /// How long planning is declared to take, seconds: what it finds is flown
+    /// that much later, on any machine.
+    pub latency_s: f64,
+    /// The most flights being planned at once.
+    pub capacity: usize,
+}
+
+impl Default for ReplanConfig {
+    fn default() -> Self {
+        Self {
+            check_s: 1.0,
+            latency_s: 0.5,
+            capacity: 16,
+        }
+    }
 }
 
 impl Default for Route3dConfig {
@@ -82,6 +108,7 @@ impl Default for Route3dConfig {
             max_climb_m: 200.0,
             wire_margin_m: 10.0,
             min_saving: 0.05,
+            replan: None,
         }
     }
 }
@@ -108,6 +135,16 @@ impl Route3dConfig {
         }
         if !(self.min_saving.is_finite() && (0.0..1.0).contains(&self.min_saving)) {
             return Err(format!("route min_saving cannot be {}", self.min_saving));
+        }
+        if let Some(replan) = &self.replan {
+            for (name, value) in [("check_s", replan.check_s), ("latency_s", replan.latency_s)] {
+                if !(value.is_finite() && value > 0.0) {
+                    return Err(format!("route replan {name} cannot be {value}"));
+                }
+            }
+            if replan.capacity == 0 {
+                return Err("a route replan of no flights replans none".into());
+            }
         }
         if self.max_nodes == 0 {
             return Err("a route search of no nodes finds nothing".into());
@@ -281,6 +318,31 @@ fn cost_wh(battery: &BatteryModel, points: &[[f64; 3]]) -> f64 {
         .windows(2)
         .map(|leg| battery.segment_cost_wh(leg[0], leg[1]))
         .sum()
+}
+
+/// Whether `way_m`, its end last, is open all along from `start`.
+pub fn way_is_open(
+    air: &impl Airspace,
+    start: [f64; 3],
+    way_m: &[[f64; 3]],
+    config: &Route3dConfig,
+) -> bool {
+    let Some(goal) = way_m.last().copied() else {
+        return true;
+    };
+    let mut search = Search {
+        air,
+        config,
+        start,
+        goal,
+        columns: BTreeMap::new(),
+    };
+    let mut from = start;
+    way_m.iter().all(|&to| {
+        let open = search.open(from, to);
+        from = to;
+        open
+    })
 }
 
 /// The cheapest way found from `start` to `goal` through `air`.

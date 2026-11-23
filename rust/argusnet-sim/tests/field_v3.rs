@@ -7,12 +7,14 @@
 //! it knows again without being put anywhere, and goes home for good when that
 //! lasts.
 
+use argusnet_planning::route3d::ReplanConfig;
 use argusnet_sim::belief_world::{FollowUpConfig, LostPositionConfig};
+use argusnet_sim::compute::ComputePool;
 use argusnet_sim::faults::{Fault, FaultManifest, MANIFEST_FORMAT, MANIFEST_VERSION};
 use argusnet_sim::mission_driver::{MissionDriverStage, SensorLost};
 use argusnet_sim::navigation::NavigationConfig;
 use argusnet_sim::run_options::{RunOptions, RunProfile};
-use argusnet_sim::scenario::{assemble, AssembledRun, ScenarioBundle};
+use argusnet_sim::scenario::{assemble, assemble_with, AssembledRun, ScenarioBundle};
 use argusnet_sim::snapshot::SimulationCheckpoint;
 use argusnet_sim::stage::Stage;
 use serde_json::Value;
@@ -465,4 +467,55 @@ fn routes_in_three_dimensions_over_seven_missions() {
         saved_wh += left[1] - left[0];
     }
     assert!(saved_wh > 0.0, "{saved_wh} Wh");
+}
+
+/// Flights planned again as the map changes under them: the same run whatever
+/// the workers plan them, and a run stopped with planning pending goes on as it
+/// would have.
+#[test]
+fn flights_planned_again_do_not_depend_on_who_plans_them() {
+    let mut options = whole_mission(None, None);
+    let exploration = options.exploration.as_mut().unwrap();
+    exploration.follow_up = None;
+    exploration.route_3d.as_mut().unwrap().replan = Some(ReplanConfig {
+        check_s: 1.0,
+        latency_s: 3.0,
+        capacity: 4,
+    });
+    options.scan_coverage_threshold = Some(0.2);
+    let run = |workers: usize| {
+        let bundle = bundle();
+        let pool = std::sync::Arc::new(ComputePool::new(workers).unwrap());
+        let mut run = assemble_with(&bundle, pool).unwrap();
+        options.apply(&mut run, &bundle).expect("options apply");
+        run
+    };
+    let frames = |run: AssembledRun| -> Vec<Value> {
+        let document = run.run_to_replay().expect("runs");
+        let frames = document.frames.iter();
+        frames.map(|f| serde_json::to_value(f).unwrap()).collect()
+    };
+    let straight = frames(run(1));
+    assert_eq!(straight, frames(run(4)), "four workers");
+    assert_eq!(phase(straight.last().unwrap()), "complete");
+    assert_eq!(contacts(&straight), 0);
+    let mut stepped = run(2);
+    let mut pending_at = Vec::new();
+    for tick in 0..bundle().steps as usize {
+        let checkpoint = stepped.sim.checkpoint().unwrap();
+        let text = serde_json::to_string(&checkpoint).unwrap();
+        if text.contains("\"input_revision\"") && pending_at.len() < 2 {
+            let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+            let mut resumed = run(1);
+            resumed.restore(&checkpoint).expect("restore accepted");
+            for (k, frame) in straight.iter().enumerate().skip(tick) {
+                resumed.step().unwrap();
+                let now = serde_json::to_value(resumed.last_frame().unwrap()).unwrap();
+                assert_eq!(&now, frame, "resumed at {tick}, tick {k}");
+            }
+            pending_at.push(tick);
+        }
+        stepped.step().unwrap();
+    }
+    assert!(!pending_at.is_empty(), "a flight was planned again");
 }

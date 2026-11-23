@@ -23,18 +23,34 @@ pub struct RouteAir {
 
 impl RouteAir {
     pub fn plan(&self, battery: &BatteryModel, start: [f64; 3], goal: [f64; 3]) -> Plan3d {
-        let map = self.map.current();
-        let air = Columns {
-            map: &map,
+        self.plan_on(&self.map.current(), battery, start, goal)
+    }
+
+    /// [`Self::plan`] over `map`, as it was when that was taken.
+    pub fn plan_on(
+        &self,
+        map: &BeliefSnapshot,
+        battery: &BatteryModel,
+        start: [f64; 3],
+        goal: [f64; 3],
+    ) -> Plan3d {
+        plan(&self.columns(map), battery, start, goal, &self.config)
+    }
+
+    /// The air over `map`.
+    pub fn columns<'a>(&'a self, map: &'a BeliefSnapshot) -> Columns<'a> {
+        Columns {
+            map,
             surface: &self.surface,
             wires: self.wires.as_ref(),
             wire_margin_m: self.config.wire_margin_m,
-        };
-        plan(&air, battery, start, goal, &self.config)
+        }
     }
 }
 
-struct Columns<'a> {
+/// The air over one map, as columns.
+#[derive(Debug)]
+pub struct Columns<'a> {
     map: &'a BeliefSnapshot,
     surface: &'a MissionFlightConfig,
     wires: Option<&'a WirePlanningConfig>,

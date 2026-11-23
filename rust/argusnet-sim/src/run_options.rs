@@ -278,11 +278,19 @@ impl RunOptions {
                 options.exploration.as_ref()?.navigation.as_ref()
             }
             let navigation = of(self) != of(&profile.options());
-            let id = if navigation {
-                format!("{}+navigation", profile.as_str())
-            } else {
-                profile.as_str().to_string()
-            };
+            fn replans(options: &RunOptions) -> bool {
+                let exploration = options.exploration.as_ref();
+                exploration
+                    .and_then(|exploration| exploration.route_3d.as_ref())
+                    .is_some_and(|route| route.replan.is_some())
+            }
+            let mut id = profile.as_str().to_string();
+            if navigation {
+                id.push_str("+navigation");
+            }
+            if replans(self) != replans(&profile.options()) {
+                id.push_str("+replan");
+            }
             run.extend_replay_meta([("run_profile".to_string(), serde_json::json!({ "id": id }))]);
         }
         if let Some(threshold) = self.scan_coverage_threshold {

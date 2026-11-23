@@ -333,6 +333,34 @@ impl GotoHover {
 
     /// Where this trajectory ends. Stage 9 stores it to decide when a platform
     /// has arrived.
+    pub fn start(&self) -> [f64; 3] {
+        self.start
+    }
+
+    /// The points it flies to from its start, its target last, each with the
+    /// height it is flown at there.
+    pub fn way_m(&self) -> Vec<[f64; 3]> {
+        let total = self.path_length_m();
+        let mut flown = 0.0;
+        let mut last = [self.start[0], self.start[1]];
+        let mut way: Vec<[f64; 3]> = Vec::with_capacity(self.via_xy.len() + 1);
+        for (k, xy) in self.via_xy.iter().enumerate() {
+            flown += (xy[0] - last[0]).hypot(xy[1] - last[1]);
+            last = *xy;
+            let linear = || {
+                let share = if total > 0.0 { flown / total } else { 1.0 };
+                self.start[2] + (self.target_z - self.start[2]) * share
+            };
+            way.push([
+                xy[0],
+                xy[1],
+                self.via_z.get(k).copied().unwrap_or_else(linear),
+            ]);
+        }
+        way.push(self.target());
+        way
+    }
+
     pub fn target(&self) -> [f64; 3] {
         [self.target_xy[0], self.target_xy[1], self.target_z]
     }
