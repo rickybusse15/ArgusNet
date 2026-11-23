@@ -7,7 +7,9 @@ A mission's map is kept as a **revision** of its site: an immutable document nam
 the BLAKE2b hash of its content, holding each 10 m cell's ground and its claimed
 sigma, where its returns are placed (one sigma), a structure's top, the returns
 behind it, the mission that made it and the revision it followed. Revisions are only
-added, in order, and only in the site's own coordinate frame. A file whose content is
+added, in order, and only in the site's own coordinate frame: the world's origin on the
+earth, whichever of its layers (terrain, buildings, features) set it. A site is held
+while a revision is added, so missions that finish together are all kept. A file whose content is
 not what its name says is refused.
 
 The next mission is compared with the last, and what differs is kept beside it.
@@ -59,5 +61,5 @@ of it, on seeds 7, 42 and 4451; 1010 and the changed worlds were run after.
 
 ## Tests
 
-`site_memory.rs` (12) and `rust/argusnet-cli/tests/site_memory.rs` (two missions of one
+`site_memory.rs` (13) and `rust/argusnet-cli/tests/site_memory.rs` (two missions of one
 site through the CLI, and what is refused).
