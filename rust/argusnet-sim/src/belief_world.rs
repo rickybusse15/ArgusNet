@@ -1965,6 +1965,16 @@ impl FittedHazard {
         Some([normal[0] * sign, normal[1] * sign])
     }
 
+    /// Whether a flight kept `agl_m` over the believed ground is above this
+    /// wire's clearance all along it.
+    fn cleared_by(&self, belief: &BeliefSnapshot, agl_m: f64) -> bool {
+        self.pieces.iter().all(|piece| {
+            [piece.start_m, piece.end_m]
+                .iter()
+                .all(|end| belief.ground_at(end[0], end[1]) + agl_m >= end[2] + self.clearance_m)
+        })
+    }
+
     /// Whether a straight flight crosses this wire.
     fn crossed_by(&self, from: [f64; 2], to: [f64; 2]) -> bool {
         let flat = |p: [f64; 2]| [p[0], p[1], 0.0];
@@ -2882,12 +2892,14 @@ impl BeliefSnapshot {
     /// is crossing one, or wire planning is off, or when `goal_m` lies inside
     /// the corridor, where the flight is going on purpose: `goal_m` is `None`
     /// for a flight with no goal of its own, such as a search lane, which is
-    /// turned out wherever it runs.
+    /// turned out wherever it runs. A flight kept `over_agl_m` over the ground
+    /// is in no corridor of a wire that clears.
     pub fn out_of_corridor(
         &self,
         xy_m: [f64; 2],
         direction: [f64; 2],
         goal_m: Option<[f64; 2]>,
+        over_agl_m: Option<f64>,
     ) -> Option<[f64; 2]> {
         /// A flight within about 25 degrees of a wire is running along it.
         /// Wider, a flight crossing at an angle was turned back out at the
@@ -2902,14 +2914,23 @@ impl BeliefSnapshot {
         self.fitted_hazards
             .iter()
             .filter(|hazard| {
-                hazard.repels && hazard.covers(here) && !goal.is_some_and(|g| hazard.covers(g))
+                hazard.repels
+                    && hazard.covers(here)
+                    && !goal.is_some_and(|g| hazard.covers(g))
+                    && !over_agl_m.is_some_and(|agl_m| hazard.cleared_by(self, agl_m))
             })
             .find_map(|hazard| hazard.way_out(xy_m, direction, ALONG_COS))
     }
 
     /// What a straight flight between two points costs in crossing fitted
-    /// wires, in metres of flight: nothing without wire planning.
-    pub fn crossing_cost_m(&self, from_m: [f64; 2], to_m: [f64; 2]) -> f64 {
+    /// wires, in metres of flight: nothing without wire planning, nor for a
+    /// wire that a flight kept `over_agl_m` over the ground clears.
+    pub fn crossing_cost_m(
+        &self,
+        from_m: [f64; 2],
+        to_m: [f64; 2],
+        over_agl_m: Option<f64>,
+    ) -> f64 {
         if self.crossing_penalty_m <= 0.0 {
             return 0.0;
         }
@@ -2918,10 +2939,13 @@ impl BeliefSnapshot {
         /// What a metre flown over a wire's own line costs, in metres: a
         /// flight along a line has neither over nor under for long.
         const ALONG_COST: f64 = 5.0;
+        let in_the_way = |hazard: &FittedHazard| {
+            hazard.repels && !over_agl_m.is_some_and(|agl_m| hazard.cleared_by(self, agl_m))
+        };
         let crossed = self
             .fitted_hazards
             .iter()
-            .filter(|hazard| hazard.repels && hazard.crossed_by(from_m, to_m))
+            .filter(|hazard| hazard.crossed_by(from_m, to_m) && in_the_way(hazard))
             .count();
         let length = (to_m[0] - from_m[0]).hypot(to_m[1] - from_m[1]);
         let steps = (length / STEP_M).ceil().max(1.0) as usize;
@@ -2935,7 +2959,7 @@ impl BeliefSnapshot {
                 ];
                 self.fitted_hazards
                     .iter()
-                    .any(|hazard| hazard.repels && hazard.covers(at))
+                    .any(|hazard| hazard.covers(at) && in_the_way(hazard))
             })
             .count();
         self.crossing_penalty_m * crossed as f64 + ALONG_COST * STEP_M * along as f64
@@ -3961,25 +3985,42 @@ mod tests {
         let snapshot = belief.snapshot(&config);
         let (at, east) = ([50.0, 3.0], [1.0, 0.0]);
         assert!(snapshot
-            .out_of_corridor(at, east, Some([90.0, 80.0]))
+            .out_of_corridor(at, east, Some([90.0, 80.0]), None)
             .is_some());
-        assert_eq!(snapshot.out_of_corridor(at, east, Some([90.0, 4.0])), None);
+        assert_eq!(
+            snapshot.out_of_corridor(at, east, Some([90.0, 4.0]), None),
+            None
+        );
         assert!(
-            snapshot.out_of_corridor(at, east, None).is_some(),
+            snapshot.out_of_corridor(at, east, None, None).is_some(),
             "a lane is turned out wherever it runs"
         );
         assert_eq!(
-            snapshot.out_of_corridor(at, [0.7, 0.7], Some([90.0, 80.0])),
+            snapshot.out_of_corridor(at, [0.7, 0.7], Some([90.0, 80.0]), None),
             None,
             "crossing at 45 degrees is the climb's, not a turn's"
         );
         assert_eq!(
             belief
                 .snapshot(&ExplorationConfig::default())
-                .out_of_corridor(at, east, Some([90.0, 80.0])),
+                .out_of_corridor(at, east, Some([90.0, 80.0]), None),
             None,
             "off without wire planning"
         );
+        // Flown well over it, it is neither turned from nor paid for; flown
+        // at its height, both.
+        // (The ground here is unseen: heights are over its stand-in.)
+        let level = 100.0 - snapshot.ground_at(50.0, 0.0);
+        let turned = |over_m: f64| {
+            snapshot
+                .out_of_corridor(at, east, Some([90.0, 80.0]), Some(level + over_m))
+                .is_some()
+        };
+        assert!(turned(0.0) && !turned(60.0));
+        let cost = |over| snapshot.crossing_cost_m([50.0, -40.0], [50.0, 40.0], over);
+        assert!(cost(None) >= 300.0);
+        assert_eq!(cost(Some(level)), cost(None));
+        assert_eq!(cost(Some(level + 60.0)), 0.0);
     }
 
     fn wire(height_m: f64) -> PowerLine {

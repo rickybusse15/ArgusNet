@@ -345,7 +345,7 @@ impl FrontierExplorer {
             if cost < MIN_GOAL_DISTANCE_M {
                 continue;
             }
-            cost += belief.crossing_cost_m(from, centre);
+            cost += belief.crossing_cost_m(from, centre, None);
             if spent
                 .iter()
                 .any(|s| (s[0] - centre[0]).hypot(s[1] - centre[1]) < SPENT_RADIUS_M)
@@ -396,6 +396,13 @@ impl FrontierExplorer {
             let (p, _) = self.lane.sample(t, terrain, obstacles);
             [p[0], p[1]]
         };
+        // The height kept over the ground, for a planner that flies over the
+        // wires it clears (the lane's own, when that is higher).
+        let over_agl_m = self
+            .planning
+            .as_ref()
+            .filter(|planning| planning.config.over_wires)
+            .map(|_| config.base_agl_m.max(config.min_agl_m));
         let state = &mut self.state;
         let xy = *state.xy_m.get_or_insert_with(|| lane_xy(timestamp_s));
         let dt = state
@@ -448,7 +455,7 @@ impl FrontierExplorer {
                                 }
                             },
                             |to| {
-                                let mut detour_m = belief.crossing_cost_m(xy, to);
+                                let mut detour_m = belief.crossing_cost_m(xy, to, over_agl_m);
                                 if spent
                                     .iter()
                                     .any(|s| (s[0] - to[0]).hypot(s[1] - to[1]) < SPENT_RADIUS_M)
@@ -513,7 +520,7 @@ impl FrontierExplorer {
         // Out of a corridor it is running along, not on down it.
         let direction = match (moving, backing) {
             (true, None) => belief
-                .out_of_corridor(xy, direction, (!state.on_lane).then_some(goal))
+                .out_of_corridor(xy, direction, (!state.on_lane).then_some(goal), over_agl_m)
                 .map_or(direction, |out| {
                     let turned = [direction[0] + out[0], direction[1] + out[1]];
                     let length = turned[0].hypot(turned[1]).max(1e-9);
