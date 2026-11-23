@@ -79,7 +79,7 @@ fn phase(frame: &Value) -> &str {
     frame["scan_mission_state"]["phase"].as_str().unwrap()
 }
 
-fn estimate<'a>(frame: &'a Value) -> &'a Value {
+fn estimate(frame: &Value) -> &Value {
     frame["navigation"]
         .as_array()
         .unwrap()
