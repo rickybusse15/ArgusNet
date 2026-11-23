@@ -2169,9 +2169,9 @@ impl BeliefSnapshot {
             .map_or(0.0, |reason| deficit_weight(reason, weights))
     }
 
-    /// Every block that needs work ([`Self::work_centres`]), with the
-    /// weighted deficit flying over it would fix (SR5d). Empty without a
-    /// requirement.
+    /// Every explorer goal ([`Self::goal_centres`]): each block that needs
+    /// work with the weighted deficit flying over it would fix (SR5d), then
+    /// each unsettled stretch of a prior span. Empty without a requirement.
     pub fn work_blocks(
         &self,
         share: f64,
@@ -2202,6 +2202,16 @@ impl BeliefSnapshot {
                 });
             }
         }
+        // A stretch of a prior span flight could still settle (W5) is a goal
+        // too, worth an unseen block: the nearest-goal explorer treats the
+        // two alike, and without it the prior is never investigated.
+        let unseen_block = (BLOCK_CELLS * BLOCK_CELLS) as f64 * weights.unseen;
+        blocks.extend(self.prior_goals.iter().map(|&centre_m| {
+            argusnet_planning::views::WorkBlock {
+                centre_m,
+                gain: unseen_block,
+            }
+        }));
         blocks
     }
 
@@ -3339,6 +3349,15 @@ mod tests {
         assert_eq!(snapshot.deficit_weight_at(250.0, 25.0, &weights), 0.0);
         assert!(!snapshot.needs_work(25.0, 25.0, 0.5));
         assert!(!snapshot.work_centres(0.5).contains(&[25.0, 25.0]));
+        // The planner sees the goals the nearest-goal explorer does, a
+        // prior's unsettled stretches included (W5).
+        let mut with_prior = snapshot.clone();
+        with_prior.prior_goals = Arc::new(vec![[37.0, 61.0]]);
+        let blocks = with_prior.work_blocks(0.5, &weights);
+        let centres: Vec<[f64; 2]> = blocks.iter().map(|b| b.centre_m).collect();
+        assert_eq!(centres, with_prior.goal_centres(0.5));
+        assert_eq!(centres.last(), Some(&[37.0, 61.0]));
+        assert!(blocks.iter().all(|b| b.gain > 0.0));
         // Without a requirement, work is the unexplored share.
         let plain = belief.snapshot(&config);
         assert_eq!(plain.work_centres(0.5), plain.unexplored_centres(0.5));
