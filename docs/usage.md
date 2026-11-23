@@ -347,6 +347,9 @@ python scripts/real_site_inspection.py --output runs/real-site --profile field_v
 python scripts/qualify_field_profile.py --output runs/field-v1
 ```
 
+`--map-report FILE` writes what the map was asked for against what it achieved
+([MAP_REPORT.md](migration/MAP_REPORT.md)).
+
 ### Mapping run with split-view 3-D reconstruction
 
 Run a scan/map/inspect mission, package it, and open the viewer with the real

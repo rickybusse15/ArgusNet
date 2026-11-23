@@ -590,6 +590,24 @@ pub struct BeliefStats {
     pub structure_precision: Option<f32>,
     #[serde(default)]
     pub structure_recall: Option<f32>,
+    /// The map against the run's quality requirement (SR5a); `None` without
+    /// one.
+    #[serde(default)]
+    pub quality: Option<QualityStats>,
+}
+
+/// How many cells give each deficit reason, at one frame.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct QualityStats {
+    pub met_fraction: f32,
+    pub met_cells: u64,
+    pub unseen_cells: u64,
+    pub too_oblique_cells: u64,
+    pub sparse_cells: u64,
+    pub stale_cells: u64,
+    pub image_coarse_cells: u64,
+    pub unreachable_cells: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

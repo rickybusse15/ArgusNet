@@ -851,6 +851,9 @@ pub struct AssembledRun {
     /// there is right; but a scanner seldom sees a thin trunk, so recall
     /// stays the buildings' and walls'. Never read by the run.
     true_trunks: Vec<bool>,
+    /// What one survey pass should leave, from the declared sensors, for the
+    /// map's report.
+    predicted_pass: Option<crate::map_report::PassPrediction>,
     /// Each drone's task changes (P0), rebuilt from every committed tick and
     /// written as `meta.assignment_history`. Not checkpointed: like the
     /// frames, a resumed run's history starts at its checkpoint.
@@ -1479,6 +1482,7 @@ pub fn assemble_with(
         belief: None,
         true_structures: Vec::new(),
         true_trunks: Vec::new(),
+        predicted_pass: None,
         assignments: Default::default(),
     })
 }
@@ -2174,8 +2178,21 @@ impl AssembledRun {
                 }
             }
         }
+        // What a pass at the height and speed just set should leave.
+        let predicted_pass = match (&pod, &config.quality, controllers.explorer_survey()) {
+            (Some(pod), Some(quality), Some((speed_mps, agl_m))) => pod.predicted_pass(
+                agl_m,
+                speed_mps,
+                dt_s,
+                quality,
+                config.scan.range_noise_m,
+                resolution_m * resolution_m,
+            ),
+            _ => None,
+        };
         controllers.set_physical_guard(guard.clone());
         controllers.set_explorers_rejoin(rejoin_explorers);
+        self.predicted_pass = predicted_pass;
         let wire_planning = wire_planning_config;
         let governed_map = handle.clone();
 
@@ -3071,7 +3088,71 @@ impl AssembledRun {
             self.replay
                 .extend_meta([("assignment_history".to_string(), document)]);
         }
+        let reports = self
+            .mapping()
+            .and_then(|mapping| mapping.exploration_config())
+            .is_some_and(|config| config.map_report);
+        if let Some(report) = reports.then(|| self.map_report()).flatten() {
+            let document = serde_json::to_value(&report).expect("a report serialises");
+            self.replay
+                .extend_meta([("map_report".to_string(), document)]);
+        }
         Ok(self.replay.finish())
+    }
+
+    /// What the map was asked for against what it holds now. `None` without
+    /// a quality requirement.
+    pub fn map_report(&self) -> Option<crate::map_report::MapReport> {
+        let mapping = self.mapping()?;
+        let (grid, config) = (mapping.belief_grid()?, mapping.exploration_config()?);
+        let requirement = config.quality.as_ref()?;
+        // As of what the map last published: the ages it was judged at.
+        let tick = grid.quality_tick()?;
+        let (nx, ny) = grid.dimensions();
+        let true_ground_m = match &self.report.terrain {
+            Some(terrain) => (0..nx * ny)
+                .map(|k| {
+                    let [x, y] = grid.centre_ij(k % nx, k / nx);
+                    crate::motion::TerrainSampler::height_at(terrain, x, y)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let mut canopy = vec![false; nx * ny];
+        let (origin_m, resolution_m) = (grid.origin_m(), grid.resolution_m());
+        for tree in self.world.trees.trees() {
+            let bounds = tree.bounds_xy_m();
+            let span = |low: f64, high: f64, origin: f64, n: usize| {
+                let at = |v: f64| ((v - origin) / resolution_m).floor();
+                (
+                    at(low).max(0.0) as usize,
+                    (at(high) + 1.0).clamp(0.0, n as f64) as usize,
+                )
+            };
+            let (i0, i1) = span(bounds.x_min_m, bounds.x_max_m, origin_m[0], nx);
+            let (j0, j1) = span(bounds.y_min_m, bounds.y_max_m, origin_m[1], ny);
+            for j in j0..j1 {
+                for i in i0..i1 {
+                    canopy[j * nx + i] = true;
+                }
+            }
+        }
+        Some(crate::map_report::build(crate::map_report::ReportInput {
+            nx,
+            ny,
+            origin_m,
+            resolution_m,
+            tick,
+            timestamp_s: tick as f64 * self.dt_s,
+            requirement,
+            per_return_sigma_m: config.scan.range_noise_m,
+            finest_image_gsd_m: grid.finest_image_gsd_m(),
+            evidence: grid.all_evidence(tick, self.dt_s),
+            predicted: self.predicted_pass.clone(),
+            true_ground_m,
+            structures: &self.true_structures,
+            canopy: &canopy,
+        }))
     }
 
     /// The assignment history so far (P0).

@@ -568,6 +568,36 @@ impl ControllerStage {
         }
     }
 
+    /// The fastest any frontier explorer flies, and the height over the
+    /// ground it keeps, its launch wrapper's floor included. `None` without
+    /// one.
+    pub fn explorer_survey(&self) -> Option<(f64, f64)> {
+        self.state
+            .controllers
+            .iter()
+            .filter_map(|(_, controller)| {
+                let (operational, floor_m) = match controller {
+                    PlatformController::Free(operational) => (operational, 0.0),
+                    PlatformController::Launched {
+                        controller,
+                        profile,
+                        ..
+                    } => (controller.operational(), profile.min_operational_agl_m),
+                    PlatformController::Static { .. } => return None,
+                };
+                match operational {
+                    Operational::Explore(explorer) => {
+                        let lane = explorer.lane();
+                        let config = lane.config();
+                        let agl_m = config.base_agl_m.max(config.min_agl_m).max(floor_m);
+                        Some((lane.speed_mps(), agl_m))
+                    }
+                    _ => None,
+                }
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+    }
+
     /// Cap every mobile controller's speed to `speed_at` the lowest height
     /// over the ground its own path keeps, or `agl_m` where it has none or
     /// keeps more: what stays sharp from there (SR4). After the height caps,

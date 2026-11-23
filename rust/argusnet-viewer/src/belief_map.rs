@@ -888,6 +888,9 @@ pub fn belief_readout_ui_system(
                             percent(stats.structure_recall),
                             percent(stats.structure_precision),
                         ));
+                        if let Some(quality) = &stats.quality {
+                            ui.monospace(quality_line(quality));
+                        }
                     }
                     None => {
                         ui.monospace("nothing sensed yet");
@@ -937,9 +940,55 @@ pub fn belief_readout_ui_system(
 /// Where "Save map as scene" writes, relative to the working directory.
 const SAVED_MAPS_DIR: &str = "argusnet-maps";
 
+/// The map against its requirement in one line: the share met, then what
+/// the rest lack, commonest first. A reason no cell gives is left out.
+fn quality_line(quality: &argusnet_replay::QualityStats) -> String {
+    let mut lacking = vec![
+        ("unseen", quality.unseen_cells),
+        ("oblique", quality.too_oblique_cells),
+        ("sparse", quality.sparse_cells),
+        ("stale", quality.stale_cells),
+        ("no fine image", quality.image_coarse_cells),
+        ("unreachable", quality.unreachable_cells),
+    ];
+    lacking.retain(|(_, cells)| *cells > 0);
+    lacking.sort_by_key(|(_, cells)| std::cmp::Reverse(*cells));
+    let rest: Vec<String> = lacking
+        .iter()
+        .map(|(name, cells)| format!("{cells} {name}"))
+        .collect();
+    let met = format!("requirement met {:.1}%", quality.met_fraction * 100.0);
+    if rest.is_empty() {
+        met
+    } else {
+        format!("{met}  lacking: {}", rest.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_quality_line_names_what_is_lacking_commonest_first() {
+        let line = quality_line(&argusnet_replay::QualityStats {
+            met_fraction: 0.9048,
+            met_cells: 13795,
+            unseen_cells: 585,
+            sparse_cells: 226,
+            image_coarse_cells: 640,
+            ..Default::default()
+        });
+        assert_eq!(
+            line,
+            "requirement met 90.5%  lacking: 640 no fine image, 585 unseen, 226 sparse"
+        );
+        let done = argusnet_replay::QualityStats {
+            met_fraction: 1.0,
+            ..Default::default()
+        };
+        assert_eq!(quality_line(&done), "requirement met 100.0%");
+    }
 
     /// The run's true lines and trees are hidden with the scene's layers
     /// when a self-built map appears, once (so a viewer can turn them back

@@ -259,3 +259,23 @@ def test_thresholds_are_checked_on_load(tmp_path):
         path.write_text(json.dumps({**document, **change}), encoding="utf-8")
         with pytest.raises(ValueError):
             load_thresholds(path)
+
+
+def test_the_maps_report_is_measured_when_the_replay_has_one():
+    replay = {
+        "meta": {
+            "map_report": {
+                "achieved": {"passes_at_median": 1.8, "image_gsd_m": {"p90": 0.036}},
+                "calibration": {"normalized_rms": 1.2, "within_2_sigma": 0.92},
+            }
+        },
+        "frames": [{"nodes": [], "timestamp_s": 0.0}],
+    }
+    measured = measure(replay)
+    assert measured["map_error_over_claim"] == 1.2
+    assert measured["map_error_within_2_sigma"] == 0.92
+    assert measured["passes_at_median"] == 1.8
+    assert measured["image_gsd_p90_m"] == 0.036
+    # A replay without one is unknown, not zero: a gate on it fails.
+    replay["meta"] = {}
+    assert measure(replay)["map_error_over_claim"] is None

@@ -21,6 +21,7 @@ pub mod ground;
 pub mod imaging;
 pub mod journal;
 pub mod lidar_returns;
+pub mod map_report;
 pub mod mapping;
 pub mod mission;
 pub mod mission_driver;

@@ -134,6 +134,10 @@ pub struct ExplorationConfig {
     /// fix. Needs a rig and a quality requirement; cruise only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_planning: Option<argusnet_planning::views::ViewPlanningConfig>,
+    /// Write the map's report ([`crate::map_report`]) into the replay's
+    /// `meta.map_report` when the run ends. Needs a quality requirement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub map_report: bool,
     /// Model the pod's cameras (SR4): each capture says what its images are
     /// worth, and a requirement may ask for a ground sample distance. Needs
     /// a rig.
@@ -379,6 +383,7 @@ impl Default for ExplorationConfig {
             mission_flights: None,
             view_planning: None,
             imaging: None,
+            map_report: false,
         }
     }
 }
@@ -469,6 +474,9 @@ impl ExplorationConfig {
                 return Err("view planning chooses the pointing; do not set one as well".into());
             }
             planning.validate()?;
+        }
+        if self.map_report && self.quality.is_none() {
+            return Err("a map report needs a quality requirement to report on".into());
         }
         if let Some(imaging) = &self.imaging {
             if self.rig.is_none() {
@@ -1044,6 +1052,18 @@ impl BeliefGrid {
                 .filter(|&&gsd| gsd > 0)
                 .map(|&gsd| gsd as f64 * 1e-5),
         }
+    }
+
+    /// Every cell's evidence at tick `now`, for the map's report.
+    pub fn all_evidence(&self, now: u64, dt_s: f64) -> Vec<CellEvidence> {
+        (0..self.cell_count())
+            .map(|k| self.evidence(k, now, dt_s))
+            .collect()
+    }
+
+    /// The finest image any flight gets, with an image requirement (SR4).
+    pub fn finest_image_gsd_m(&self) -> Option<f64> {
+        self.image_footprint.map(|(_, finest)| finest)
     }
 
     /// Every cell's quality against `requirement` at tick `now` (SR5a).

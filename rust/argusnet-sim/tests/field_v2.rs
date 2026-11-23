@@ -60,6 +60,7 @@ fn the_profile_is_field_v1_and_what_it_adds() {
     let exploration = stripped.exploration.as_mut().unwrap();
     exploration.view_planning = None;
     exploration.imaging = None;
+    exploration.map_report = false;
     exploration.quality.as_mut().unwrap().max_image_gsd_m = None;
     assert_eq!(stripped, v1);
 
@@ -131,4 +132,53 @@ fn the_whole_mission_touches_nothing_and_completes() {
         pois.iter().all(|poi| poi["status"] == "complete"),
         "{pois:?}"
     );
+}
+
+/// The replay says what the map was asked for against what it achieved, and
+/// its counts are the last frame's.
+#[test]
+fn the_replay_carries_the_maps_report() {
+    let bundle = bundle();
+    let (meta, frames) = replay(run_with(&bundle, &whole_mission()));
+    let report = &meta["map_report"];
+    assert_eq!(report["format"], "argusnet.map-report");
+    assert_eq!(
+        report["asked"],
+        meta["world_knowledge"]["exploration"]["quality"]
+    );
+    let quality = &frames.last().unwrap()["mapping_state"]["belief"]["quality"];
+    let counts = &report["achieved"]["counts"];
+    for reason in ["met", "unseen", "too_oblique", "sparse", "stale"] {
+        assert_eq!(
+            counts[reason],
+            quality[format!("{reason}_cells")],
+            "{reason}"
+        );
+    }
+    assert_eq!(report["achieved"]["met_fraction"], quality["met_fraction"]);
+    let predicted = &report["predicted"];
+    assert!(predicted["density_per_m2"].as_f64().unwrap() > 0.0);
+    assert!(predicted["image_gsd_m"].as_f64().unwrap() <= 0.04);
+    let calibration = &report["calibration"];
+    let ratio = calibration["normalized_rms"].as_f64().unwrap();
+    assert!((0.2..5.0).contains(&ratio), "{calibration}");
+    let total: u64 = report["missed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|missed| missed["cells"].as_u64().unwrap())
+        .sum();
+    assert_eq!(
+        total + counts["met"].as_u64().unwrap(),
+        report["cells"].as_u64().unwrap()
+    );
+    // field_v1 writes none, but can be asked.
+    let mut v1 = run_with(&bundle, &RunOptions::field_v1());
+    for _ in 0..80 {
+        v1.step().unwrap();
+    }
+    let asked = v1.map_report().expect("it has a requirement");
+    assert_eq!(asked.tick, 79, "as of the last tick run");
+    let (meta, _) = replay(run_with(&bundle, &RunOptions::field_v1()));
+    assert!(meta.get("map_report").is_none());
 }
