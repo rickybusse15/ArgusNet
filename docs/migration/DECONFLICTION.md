@@ -87,3 +87,13 @@ Asserted in `four_recorded_equivalent_mutants_in_the_deconfliction_layer`:
 4. **The `len() < 2` early return.** With one platform the pairwise loop makes
    no pairs and a corridor needs two members, so the function already does
    nothing.
+
+## Over the believed surface (`separation_surface`, on in `field_v3`)
+
+Separation already keeps its yielder and its peer off the wires the map holds.
+With `separation_surface` it keeps both above what the map believes stands ahead
+of them too (ground, structures, the navigation camera's obstacles) by the
+mission flights' clearance, and by the drone's own position uncertainty. As for
+a wire, the limit is never past where the drone was proposed, and the peer makes
+up the rest. Found beside the wire problem, on a separate branch; on the two
+real sites, whose buildings are low, no tuning seed's outcome moved.

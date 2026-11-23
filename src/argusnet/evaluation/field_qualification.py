@@ -130,6 +130,33 @@ def _wire_clearance_min_m(
     return best
 
 
+def _position_within_2_sigma(frames: list[dict[str, Any]]) -> float | None:
+    """Share of the aircraft's position errors within twice the claimed sigma.
+
+    Each axis of each aircraft on each tick is one: the horizontal sigma is
+    the worse horizontal axis's. ``None`` in a run that estimates no position.
+    """
+    inside = total = 0
+    for frame in frames:
+        poses = frame.get("navigation") or []
+        if not poses:
+            continue
+        true = {node["node_id"]: node["position"] for node in frame.get("nodes", [])}
+        for pose in poses:
+            at = true.get(pose["node_id"])
+            if at is None:
+                continue
+            sigmas = (
+                pose["horizontal_sigma_m"],
+                pose["horizontal_sigma_m"],
+                pose["vertical_sigma_m"],
+            )
+            for believed, real, sigma in zip(pose["position_m"], at, sigmas, strict=True):
+                total += 1
+                inside += abs(believed - real) <= 2.0 * sigma
+    return inside / total if total else None
+
+
 def measure(replay: dict[str, Any]) -> dict[str, Any]:
     """Every quantity the thresholds name, as the replay holds it.
 
@@ -217,6 +244,8 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
         # over what it claims, and what one pass left against the prediction.
         "map_error_over_claim": calibration.get("normalized_rms"),
         "map_error_within_2_sigma": calibration.get("within_2_sigma"),
+        # The navigation's own: where it has each aircraft, against where it is.
+        "position_within_2_sigma": _position_within_2_sigma(frames),
         "passes_at_median": achieved.get("passes_at_median"),
         "image_gsd_p90_m": image_gsd.get("p90"),
         "run_profile": (meta.get("run_profile") or {}).get("id"),

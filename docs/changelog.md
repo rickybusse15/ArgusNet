@@ -2,6 +2,11 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- `--profile field_v3`: `field_v2` on estimated positions, with cells placed to
+  0.5 m, a lost drone's hold and return, and separation over the believed
+  surface. Limits are frozen; it is not qualified yet.
+  - A drone let go from a hold is flown back to its controller's path. It was put
+    there, up to three steps in one tick, after a camera outage too.
 - A second real site: Montague City, Massachusetts (`tests/fixtures/real`), a
   river village with 14 power lines and 55 m of relief. `field_v2` failed all three
   tuning seeds flown there and was changed; it now qualifies on both sites, 15 of 15

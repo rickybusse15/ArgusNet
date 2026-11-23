@@ -56,6 +56,30 @@ profile, which is qualified without it.
 
 `gnss_outage` (F2) takes an aircraft's fixes away for a time.
 
+## When it is lost
+
+With `fault_return.lost_position` (on in `field_v3`) a drone that knows where it
+is to worse than `hold_sigma_m` (5 m, half a cell: past it a capture is refused,
+so flying on maps nothing) brakes to a hold where it believes it is, above what
+may be there, as one whose navigation camera is out does. It goes on when it
+knows again. One that has never had a fix is lost from the first. `home_after_s` (240 s) after its last fix it goes home for good, at
+the blind speed. A drone let go from a hold is flown back to where its
+controller ran on to while it held, at 1.25 times the speed asked; before, it
+was put there, up to three steps in one tick (the camera's hold did the same).
+
+Measured on `field_v3`, the seven tuning seeds on each site, no GNSS
+60–240 s:
+
+| | Both drones lose it | One does |
+| --- | --- | --- |
+| Complete in 600 s | 13 of 14 | 14 of 14 |
+| at | 514–574 s | 446–569 s |
+| Every gate passed | 13 of 14 | 14 of 14 |
+| Closest drones | 20.2 m | 20.8 m |
+
+Flying on completed as many (13 of 14), about 20 s later on average. The hold
+is for what is under the drone, not for time.
+
 ## Is the filter honest?
 
 Over 400 seeded runs of a survey each, the position error's squared length in
@@ -142,7 +166,8 @@ the widened one.
 - Structures and poles carry no pose sigma of their own; wires do.
 - Lanes and explorers keep their own height: only mission flights, wires and
   separation widen.
-- A lost aircraft has no declared fallback: it flies on.
+- A lost aircraft holds and goes home only where that is asked for
+  (`fault_return.lost_position`, on in `field_v3`); otherwise it flies on.
 - Control is perfect but for the error: no gusts, no lag.
 - Bearing observations of targets, and the grid localizer, are unchanged. The
   in-process viewer's live snapshot shows believed positions; the replay, true.

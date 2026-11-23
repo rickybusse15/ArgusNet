@@ -204,7 +204,7 @@ struct SimArgs {
     /// power lines with poles and wire-aware flight, mission flights over
     /// the believed surface, `flown_v1` energy, `contingency_v1` planning,
     /// and a declared map requirement); `field_v2` adds view planning
-    /// and imaging. The flags it sets are refused with
+    /// and imaging; `field_v3` flies that on estimated positions. The flags it sets are refused with
     /// it; faults, delivery and rates still apply. Recorded in the replay's
     /// `meta.run_profile`.
     #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse)]
@@ -709,7 +709,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
             exploration: profile.options().exploration.map(|exploration| {
                 argusnet_sim::belief_world::ExplorationConfig {
-                    navigation,
+                    navigation: navigation.or(exploration.navigation),
                     ..exploration
                 }
             }),

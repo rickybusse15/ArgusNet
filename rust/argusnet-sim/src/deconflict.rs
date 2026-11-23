@@ -307,6 +307,8 @@ impl HeldOffset {
 pub struct SeparationWires {
     pub config: crate::belief_world::WirePlanningConfig,
     pub map: crate::belief_world::BeliefHandle,
+    /// With it, nor into what the map believes stands there.
+    pub surface: Option<crate::belief_world::MissionFlightConfig>,
 }
 
 /// How fast a deconfliction offset is flown in and out.
@@ -464,7 +466,12 @@ impl DeconflictStage {
     /// past where it was proposed (a governor part way over a wire is not
     /// asked to be there already).
     fn wire_limits(&self, at: [f64; 3], velocity: [f64; 3], unsure_m: [f64; 2]) -> (f64, f64) {
-        let Some(SeparationWires { config, map }) = &self.wires else {
+        let Some(SeparationWires {
+            config,
+            map,
+            surface,
+        }) = &self.wires
+        else {
             return (f64::NEG_INFINITY, f64::INFINITY);
         };
         let speed = velocity[0].hypot(velocity[1]);
@@ -474,7 +481,21 @@ impl DeconflictStage {
             [0.0, 0.0]
         };
         let reach = (speed * config.lookahead_s).max(config.min_reach_m);
-        let bounds = map.current().hazard_bounds_within(
+        let map = map.current();
+        // What the map believes stands ahead: ground, structures, what the
+        // navigation camera saw.
+        let end = [at[0] + direction[0] * reach, at[1] + direction[1] * reach];
+        let top = surface.as_ref().and_then(|surface| {
+            map.surface_top_along(
+                [at[0], at[1]],
+                end,
+                surface.corridor_m + unsure_m[0],
+                true,
+                None,
+            )
+            .map(|top| top + surface.clearance_m + unsure_m[1])
+        });
+        let bounds = map.hazard_bounds_within(
             [at[0], at[1]],
             direction,
             reach,
@@ -483,7 +504,11 @@ impl DeconflictStage {
             unsure_m,
         );
         (
-            bounds.floor_m.map_or(f64::NEG_INFINITY, |z| z.min(at[2])),
+            [bounds.floor_m, top]
+                .into_iter()
+                .flatten()
+                .map(|z| z.min(at[2]))
+                .fold(f64::NEG_INFINITY, f64::max),
             bounds.ceiling_m.map_or(f64::INFINITY, |z| z.max(at[2])),
         )
     }
@@ -1911,6 +1936,7 @@ mod tests {
             stage.set_separation_wires(known.then(|| SeparationWires {
                 config: crate::belief_world::WirePlanningConfig::default(),
                 map: wire_map(),
+                surface: None,
             }));
             // Both bound across the wire, 4 m apart in plan.
             let pair = |a: f64, b: f64| -> Vec<(String, [f64; 3], [f64; 3])> {
@@ -1972,6 +1998,7 @@ mod tests {
         stage.set_separation_wires(Some(SeparationWires {
             config: crate::belief_world::WirePlanningConfig::default(),
             map: wire_map(),
+            surface: None,
         }));
         let config = stage.config();
         let none = std::collections::BTreeMap::new();
@@ -2016,6 +2043,7 @@ mod tests {
         stage.set_separation_wires(Some(SeparationWires {
             config: crate::belief_world::WirePlanningConfig::default(),
             map: wire_map(),
+            surface: None,
         }));
         let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 62.0], east, [0.0; 2]);
         assert!((56.0..62.0).contains(&floor), "{floor}");
@@ -2040,6 +2068,64 @@ mod tests {
             stage.wire_limits([-300.0, 0.0, 62.0], [-10.0, 0.0, 0.0], [0.0; 2]),
             (f64::NEG_INFINITY, f64::INFINITY)
         );
+    }
+
+    /// With the believed surface, a yielder is not sent down into a structure
+    /// the map holds ahead; its peer makes up the rest. Over open ground
+    /// nothing changes.
+    #[test]
+    fn a_yielder_is_not_sent_down_into_a_structure() {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        use crate::range_scan::{RangeReturn, RangeScan, ReturnClass};
+        let bounds = argusnet_types::Bounds2d::new(-500.0, 500.0, -500.0, 500.0);
+        let mut grid = BeliefGrid::new(bounds, 10.0, 0.0).unwrap();
+        let hit = |x: f64, y: f64, z: f64, class| RangeReturn {
+            point_m: [x, y, z],
+            class,
+            acquired_offset_s: None,
+            acquired_from_m: None,
+        };
+        let mut returns: Vec<RangeReturn> = (0..10_000)
+            .map(|k| {
+                let (i, j) = (f64::from(k % 100), f64::from(k / 100));
+                let (x, y) = (-495.0 + 10.0 * i, -495.0 + 10.0 * j);
+                hit(x, y, 0.0, ReturnClass::Ground)
+            })
+            .collect();
+        returns.extend((0..12).map(|_| hit(205.0, 5.0, 45.0, ReturnClass::Structure)));
+        grid.integrate(
+            &RangeScan {
+                node_id: "d".into(),
+                timestamp_s: 0.0,
+                origin_m: [0.0, 0.0, 100.0],
+                returns,
+                misses: 0,
+                wires: Vec::new(),
+                sensor: Default::default(),
+                pod: None,
+                pose: None,
+                wire_points: Vec::new(),
+                wire_lines: Vec::new(),
+            },
+            0,
+        );
+        let map = BeliefHandle::new(grid.snapshot(&ExplorationConfig::default()));
+        let limits = |surface: bool, x: f64, unsure: [f64; 2]| {
+            let mut stage = DeconflictStage::new();
+            stage.set_offset_ramp(Some(RAMP));
+            stage.set_separation_wires(Some(SeparationWires {
+                config: crate::belief_world::WirePlanningConfig::default(),
+                map: map.clone(),
+                surface: surface.then(crate::belief_world::MissionFlightConfig::default),
+            }));
+            stage.wire_limits([x, 5.0, 80.0], [7.0, 0.0, 0.0], unsure).0
+        };
+        assert_eq!(limits(false, 190.0, [0.0; 2]), f64::NEG_INFINITY);
+        let over = limits(true, 190.0, [0.0; 2]);
+        assert!((50.0..80.0).contains(&over), "{over}");
+        assert!((limits(true, 190.0, [0.0, 4.0]) - over - 4.0).abs() < 1e-9);
+        let open = limits(true, -300.0, [0.0; 2]);
+        assert!((1.0..30.0).contains(&open), "{open}");
     }
 
     /// Aircraft that do not know where they are keep further apart: a pair

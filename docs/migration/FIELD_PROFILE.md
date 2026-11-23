@@ -384,3 +384,16 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
   and no return home as a fault response (`field_v2` adds it; a lost navigation camera is answered with a braked hold, a
   jammed gimbal with fixed pointing).
 - No landing: home is a hover at the station.
+
+## `field_v3` (2026-11-23; limits frozen, not yet qualified)
+
+`field_v2` flown on a survey-grade receiver's estimated positions
+([NAVIGATION.md](NAVIGATION.md)), and:
+
+- the map requirement asks for cells placed to 0.5 m one sigma;
+- a drone that does not know where it is holds, and goes home if that lasts;
+- separation over the believed surface.
+
+Limits: [field_v3.thresholds.json](../contracts/field_v3.thresholds.json),
+`field_v2`'s unchanged and `position_within_2_sigma`. The tuning seeds pass every
+gate on both sites (14 of 14). They are never counted.

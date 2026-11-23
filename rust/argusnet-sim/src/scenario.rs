@@ -2216,6 +2216,12 @@ impl AssembledRun {
             .fault_return
             .as_ref()
             .map(|fault_return| fault_return.blind_speed_mps);
+        let lost_sigma_m = config
+            .fault_return
+            .as_ref()
+            .and_then(|fault_return| fault_return.lost_position.as_ref())
+            .map(|lost| lost.hold_sigma_m);
+        let separation_surface = config.separation_surface;
         let wire_planning = wire_planning_config;
         let governed_map = handle.clone();
         let separation_wires =
@@ -2224,6 +2230,7 @@ impl AssembledRun {
                 .map(|config| crate::deconflict::SeparationWires {
                     config,
                     map: handle.clone(),
+                    surface: mission_flights.clone().filter(|_| separation_surface),
                 });
 
         // The platforms do not know the true obstacles, so the mission
@@ -2248,6 +2255,7 @@ impl AssembledRun {
                 );
             }
             driver.set_fault_return(config.fault_return.clone());
+            driver.set_flown_positions(flown_positions.clone());
             if let Some(flights) = &mission_flights {
                 // Each POI's height over the ground: declared by the
                 // scenario, else recovered from its absolute height and the
@@ -2370,6 +2378,7 @@ impl AssembledRun {
                     .with_hold_braking(camera_braking_mps2)
                     .with_blind_speed(blind_speed_mps)
                     .with_flown_positions(flown_positions.clone())
+                    .with_lost_hold(lost_sigma_m)
                 }),
             );
         }

@@ -87,7 +87,7 @@ Status labels:
 | VIO interfaces and simple backends | **Partial** | `src/argusnet/localization/vio.py` |
 | Relocalization helpers | **Partial** | `src/argusnet/localization/relocalization.py`; not fully wired into mission execution. |
 | Pose graph / loop closure modules | **Partial** | Foundations exist; full runtime pose graph is not the current localization authority. |
-| Estimated poses in the map | **First slice** | `--navigation`: scans placed by an IMU/GNSS/heading filter's pose, its covariance in each cell's quality. Aircraft fly the estimate. Open: pose sigma on structures, a lost-aircraft fallback, a recorded flight (`docs/migration/NAVIGATION.md`). |
+| Estimated poses in the map | **First slice** | `--navigation`: scans placed by an IMU/GNSS/heading filter's pose, its covariance in each cell's quality. Aircraft fly the estimate. A lost drone holds and then goes home in `field_v3`. Open: pose sigma on structures, a recorded flight (`docs/migration/NAVIGATION.md`). |
 | Rich pose/covariance/status localization contract | **Planned** | `LOCALIZATION.md` documents the roadmap model. |
 
 ## Inspection And Mission Execution
