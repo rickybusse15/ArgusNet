@@ -1,0 +1,3351 @@
+{
+  "format": "argusnet.profile-qualification/v1",
+  "profile": "field_v3",
+  "site": "west_pleasant_view",
+  "world_id": "a6b4fb6cd062c4a5d2df4c19a37ea10ea55e1cb96a7107e9f534cfc39d390d1b",
+  "commit": "4ec476da658b05cc3683bc74f7f099dcaf185c65",
+  "binary_sha256": "9db65025b42e2fff2deeb66b4c2dd23395136368ba057663417497a4a00a881d",
+  "workflow_sha256": "1292dc7308976e03dae9ebf7a608d9b1e7dc6dfa1047499f4832fc3bd83d75d1",
+  "thresholds_sha256": "e77a4811853396e820b4b5b1b79b6faa986f2fa9040869f2fb990f57b6dbb0d9",
+  "thresholds": {
+    "format": "argusnet.profile-thresholds",
+    "version": 1,
+    "profile": "field_v3",
+    "frozen": "2026-11-23",
+    "basis": "field_v2's gates, unchanged, and what field_v3 adds, as the user set them: the profile's own map requirement asks for cells placed to 0.5 m one sigma, so quality_met_fraction gates it, and position_within_2_sigma. Declared before the first field_v3 qualification seed was run. The seven seeds field_v3 is composed on (7, 42, 707, 1010, 4451, 9002, 13127, on both sites) are tuning seeds and are never counted.",
+    "per_run": {
+      "mission_complete": {
+        "equals": true,
+        "why": "The mission reaches its complete phase inside the run."
+      },
+      "pois_complete_fraction": {
+        "min": 1.0,
+        "why": "Every inspection point is dwelt at for its required time."
+      },
+      "drones_home": {
+        "equals": true,
+        "why": "Every drone is within the egress radius of its station at the end and has not left it since the mission completed."
+      },
+      "home_radius_m": {
+        "max": 15.0,
+        "why": "The scenario's egress arrival radius."
+      },
+      "world_contacts": {
+        "max": 0,
+        "why": "The physical guard never had to stop or move a platform: nothing was flown into."
+      },
+      "known_fraction": {
+        "min": 0.9,
+        "why": "Share of map cells measured."
+      },
+      "quality_met_fraction": {
+        "min": 0.9,
+        "why": "Share of map cells meeting the profile's declared map requirement, its 4 cm image and 0.5 m horizontal one sigma included; the scan gate itself."
+      },
+      "structure_recall": {
+        "min": 0.9,
+        "why": "Share of true structure cells the map believes occupied."
+      },
+      "structure_precision": {
+        "min": 0.9,
+        "why": "Share of believed structure cells that are true structure."
+      },
+      "ground_rmse_m": {
+        "max": 1.0,
+        "why": "Measured ground against the true ground, over known cells."
+      },
+      "map_error_over_claim": {
+        "max": 1.5,
+        "why": "RMS of the map's true error over the sigma it claims (meta.map_report): a map that claims much more than it knows cannot be planned on."
+      },
+      "map_error_within_2_sigma": {
+        "min": 0.88,
+        "why": "Share of cells whose true error is within two of their claimed sigma."
+      },
+      "position_within_2_sigma": {
+        "min": 0.88,
+        "why": "Share of aircraft position errors, axis by axis and tick by tick, within two of the sigma the navigation claims for that axis."
+      },
+      "image_gsd_p90_m": {
+        "max": 0.04,
+        "why": "Nine in ten imaged cells have an image as fine as the requirement."
+      },
+      "wire_clearance_min_m": {
+        "min": 10.0,
+        "why": "Closest any drone came to a true conductor; the line's own declared clearance. Not applicable in a world without power lines."
+      },
+      "drone_separation_min_m": {
+        "min": 16.0,
+        "why": "Closest any two drones came to each other; the separation deconfliction is configured to keep. Not applicable to a single drone."
+      },
+      "energy_reserve_margin_min_wh": {
+        "min": 0.0,
+        "why": "No drone's remaining energy fell below its reserve at any tick."
+      },
+      "max_step_m": {
+        "max": 12.0,
+        "why": "No platform moves further in one 0.25 s tick than the redirect speed and climb rate allow: nothing is put somewhere, everything is flown there."
+      },
+      "repeat_identical": {
+        "equals": true,
+        "why": "The same seed and config give the same replay bytes."
+      }
+    },
+    "campaign": {
+      "min_pass_fraction": 1.0,
+      "min_qualification_seeds": 10,
+      "min_heldout_seeds": 5,
+      "why": "Every qualification and held-out seed passes every per-run gate. A gate with no value in the replay fails: an unknown requirement cannot pass."
+    },
+    "amendments": []
+  },
+  "duration_s": 600.0,
+  "seeds": {
+    "qualification": [
+      177409,
+      178501,
+      179603,
+      180701,
+      181813,
+      182901,
+      184003,
+      185107,
+      186211,
+      187303
+    ],
+    "heldout": [
+      10701,
+      10702,
+      10703,
+      10704,
+      10705
+    ],
+    "tuning": [
+      7,
+      42,
+      707,
+      1010,
+      9002,
+      4451,
+      13127,
+      119107,
+      158701
+    ]
+  },
+  "runs": [
+    {
+      "seed": 177409,
+      "role": "qualification",
+      "replay_sha256": "a3460aa4e41b5eb4c9c7311f2fa6775f136040fc73f429d83bad2ca0dfa190a2",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 505.75,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 8.976321073020163,
+        "world_contacts": 0,
+        "known_fraction": 0.9983602256329529,
+        "quality_met_fraction": 0.947527220254493,
+        "structure_recall": 0.9993108201240524,
+        "structure_precision": 0.9701159678858162,
+        "ground_rmse_m": 0.09079648207244818,
+        "wire_clearance_min_m": 23.700937823419537,
+        "drone_separation_min_m": 145.11575733842392,
+        "energy_reserve_margin_min_wh": 306.8175454370422,
+        "max_step_m": 8.524870569152519,
+        "map_error_over_claim": 0.7081721315291145,
+        "map_error_within_2_sigma": 0.9827330365573992,
+        "position_within_2_sigma": 0.9387060946827711,
+        "passes_at_median": 2.1444732569491767,
+        "image_gsd_p90_m": 0.035980000000000005,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 8.976321073020163,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9983602256329529,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.947527220254493,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9993108201240524,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9701159678858162,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09079648207244818,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7081721315291145,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9827330365573992,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9387060946827711,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.035980000000000005,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 23.700937823419537,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 145.11575733842392,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 306.8175454370422,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.524870569152519,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 178501,
+      "role": "qualification",
+      "replay_sha256": "6f93f1051136a73b2df704754d5d9a5104a05c0b4b92dcf49f28d00b107bb861",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 543.25,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 9.851757011818302,
+        "world_contacts": 0,
+        "known_fraction": 0.9975075429620884,
+        "quality_met_fraction": 0.9456250819887183,
+        "structure_recall": 1.0,
+        "structure_precision": 0.9679857714539796,
+        "ground_rmse_m": 0.09025053258215647,
+        "wire_clearance_min_m": 24.998408183573517,
+        "drone_separation_min_m": 86.83593359500287,
+        "energy_reserve_margin_min_wh": 301.39573799580955,
+        "max_step_m": 8.305141295059423,
+        "map_error_over_claim": 0.687979020067815,
+        "map_error_within_2_sigma": 0.9866972786818826,
+        "position_within_2_sigma": 0.9603637373316674,
+        "passes_at_median": 2.3997676923002693,
+        "image_gsd_p90_m": 0.036050000000000006,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 9.851757011818302,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9975075429620884,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9456250819887183,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9679857714539796,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09025053258215647,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.687979020067815,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9866972786818826,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9603637373316674,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.036050000000000006,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.998408183573517,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 86.83593359500287,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 301.39573799580955,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.305141295059423,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 179603,
+      "role": "qualification",
+      "replay_sha256": "8308d6bbc0947d23cbc8dccccae5113c815c7df606cba801070b3625b3e32e7a",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 524.75,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 10.921719658583745,
+        "world_contacts": 0,
+        "known_fraction": 0.9967204512659058,
+        "quality_met_fraction": 0.9430670339761249,
+        "structure_recall": 0.9979324603721571,
+        "structure_precision": 0.9701159678858162,
+        "ground_rmse_m": 0.09213486672458923,
+        "wire_clearance_min_m": 24.436166092014798,
+        "drone_separation_min_m": 26.87129937039395,
+        "energy_reserve_margin_min_wh": 306.9168451233257,
+        "max_step_m": 8.530659189678108,
+        "map_error_over_claim": 0.7020463351877446,
+        "map_error_within_2_sigma": 0.9855710608318656,
+        "position_within_2_sigma": 0.9419686241843677,
+        "passes_at_median": 2.1444732569491767,
+        "image_gsd_p90_m": 0.03597,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 10.921719658583745,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9967204512659058,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9430670339761249,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9979324603721571,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9701159678858162,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09213486672458923,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7020463351877446,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9855710608318656,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9419686241843677,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03597,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.436166092014798,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 26.87129937039395,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 306.9168451233257,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.530659189678108,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 180701,
+      "role": "qualification",
+      "replay_sha256": "434d97cec98732ee346fd1ea3d8a213bdb998b91df1f942bb497250ebba332a5",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 559.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 13.855620729351466,
+        "world_contacts": 0,
+        "known_fraction": 0.9968516332152696,
+        "quality_met_fraction": 0.9445100354191264,
+        "structure_recall": 0.9979324603721571,
+        "structure_precision": 0.9676985195154778,
+        "ground_rmse_m": 0.09176167748482847,
+        "wire_clearance_min_m": 25.0011037505436,
+        "drone_separation_min_m": 24.83150120206465,
+        "energy_reserve_margin_min_wh": 305.3301098470933,
+        "max_step_m": 8.526981234740568,
+        "map_error_over_claim": 0.7223754310726598,
+        "map_error_within_2_sigma": 0.9841902574150395,
+        "position_within_2_sigma": 0.9518256282104679,
+        "passes_at_median": 2.348708805230051,
+        "image_gsd_p90_m": 0.03597,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 13.855620729351466,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9968516332152696,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9445100354191264,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9979324603721571,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9676985195154778,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09176167748482847,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7223754310726598,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9841902574150395,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9518256282104679,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03597,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.0011037505436,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 24.83150120206465,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 305.3301098470933,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.526981234740568,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 181813,
+      "role": "qualification",
+      "replay_sha256": "eced597cb8f3aab62104ba861e4cb70138cc439343e42ae9bb9e7109fc906ea4",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 533.25,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 12.06688479840638,
+        "world_contacts": 0,
+        "known_fraction": 0.9944903581267218,
+        "quality_met_fraction": 0.9390003935458481,
+        "structure_recall": 0.9924190213645762,
+        "structure_precision": 0.9662466246624662,
+        "ground_rmse_m": 0.09328082968752127,
+        "wire_clearance_min_m": 25.003107565284097,
+        "drone_separation_min_m": 21.087488096043387,
+        "energy_reserve_margin_min_wh": 301.25936858820074,
+        "max_step_m": 8.01449362752885,
+        "map_error_over_claim": 0.7340589537624501,
+        "map_error_within_2_sigma": 0.9849079588521927,
+        "position_within_2_sigma": 0.9462723865056226,
+        "passes_at_median": 2.3997676923002693,
+        "image_gsd_p90_m": 0.03603,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 12.06688479840638,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9944903581267218,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9390003935458481,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9924190213645762,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9662466246624662,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09328082968752127,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7340589537624501,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9849079588521927,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9462723865056226,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03603,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.003107565284097,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 21.087488096043387,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 301.25936858820074,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.01449362752885,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 182901,
+      "role": "qualification",
+      "replay_sha256": "367bf2f8ada7cf07ff08f5b0b14630235237723be23ba3b728ec87e39e1d94f0",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 488.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 12.7285327218953,
+        "world_contacts": 0,
+        "known_fraction": 0.996064541519087,
+        "quality_met_fraction": 0.9475928112291748,
+        "structure_recall": 1.0,
+        "structure_precision": 0.9665924276169265,
+        "ground_rmse_m": 0.08855718041378337,
+        "wire_clearance_min_m": 25.018696308406867,
+        "drone_separation_min_m": 407.7183402186436,
+        "energy_reserve_margin_min_wh": 307.46582824037307,
+        "max_step_m": 8.281009285252129,
+        "map_error_over_claim": 0.6804701619328237,
+        "map_error_within_2_sigma": 0.986672079020364,
+        "position_within_2_sigma": 0.9416215465778148,
+        "passes_at_median": 2.246591031089614,
+        "image_gsd_p90_m": 0.03599,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 12.7285327218953,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.996064541519087,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9475928112291748,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9665924276169265,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08855718041378337,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6804701619328237,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.986672079020364,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9416215465778148,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03599,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.018696308406867,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 407.7183402186436,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 307.46582824037307,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.281009285252129,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 184003,
+      "role": "qualification",
+      "replay_sha256": "5ea3aad396a5bcdc0e17c0089a1fb7abfdad6e99e01780c6d158cba91b2fc1c7",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 548.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 14.685854789910238,
+        "world_contacts": 0,
+        "known_fraction": 0.9969828151646334,
+        "quality_met_fraction": 0.95369277187459,
+        "structure_recall": 0.9979324603721571,
+        "structure_precision": 0.966931216931217,
+        "ground_rmse_m": 0.0911761563867781,
+        "wire_clearance_min_m": 24.999566315620978,
+        "drone_separation_min_m": 29.70501972118023,
+        "energy_reserve_margin_min_wh": 299.7801357260645,
+        "max_step_m": 8.52353067835269,
+        "map_error_over_claim": 0.6964486471184582,
+        "map_error_within_2_sigma": 0.9862440997977073,
+        "position_within_2_sigma": 0.9648757462168541,
+        "passes_at_median": 2.552944353510925,
+        "image_gsd_p90_m": 0.03594,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 14.685854789910238,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9969828151646334,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.95369277187459,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9979324603721571,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.966931216931217,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.0911761563867781,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6964486471184582,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9862440997977073,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9648757462168541,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03594,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.999566315620978,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 29.70501972118023,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 299.7801357260645,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.52353067835269,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 185107,
+      "role": "qualification",
+      "replay_sha256": "0a52155d159c82ddcc6177824e346754aa41129479aae2dc99984f293bc2ac6b",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 524.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 8.095918862793583,
+        "world_contacts": 0,
+        "known_fraction": 0.9984914075823167,
+        "quality_met_fraction": 0.944182080545717,
+        "structure_recall": 1.0,
+        "structure_precision": 0.9679001337494427,
+        "ground_rmse_m": 0.08746153621740621,
+        "wire_clearance_min_m": 24.990162375763926,
+        "drone_separation_min_m": 23.22559177896793,
+        "energy_reserve_margin_min_wh": 304.85292093761683,
+        "max_step_m": 10.257849773121261,
+        "map_error_over_claim": 0.663258151940032,
+        "map_error_within_2_sigma": 0.9875809935205183,
+        "position_within_2_sigma": 0.9302374010828821,
+        "passes_at_median": 2.348708805230051,
+        "image_gsd_p90_m": 0.036000000000000004,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 8.095918862793583,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9984914075823167,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.944182080545717,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9679001337494427,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08746153621740621,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.663258151940032,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9875809935205183,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9302374010828821,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.036000000000000004,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.990162375763926,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 23.22559177896793,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 304.85292093761683,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 10.257849773121261,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 186211,
+      "role": "qualification",
+      "replay_sha256": "5839ca1d935c8b12dcf5be1bf6bcb01f39b8d1c865d687e435074daa4b834cc7",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 520.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 10.072246603177406,
+        "world_contacts": 0,
+        "known_fraction": 0.9975075429620884,
+        "quality_met_fraction": 0.9521185884822249,
+        "structure_recall": 0.9986216402481047,
+        "structure_precision": 0.9681697612732095,
+        "ground_rmse_m": 0.08719221793770456,
+        "wire_clearance_min_m": 25.007507095173132,
+        "drone_separation_min_m": 20.89994032730747,
+        "energy_reserve_margin_min_wh": 308.3809351859023,
+        "max_step_m": 8.530835351274025,
+        "map_error_over_claim": 0.6724838519192726,
+        "map_error_within_2_sigma": 0.9864518738204368,
+        "position_within_2_sigma": 0.9598778286824934,
+        "passes_at_median": 2.348708805230051,
+        "image_gsd_p90_m": 0.03601,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 10.072246603177406,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9975075429620884,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9521185884822249,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9986216402481047,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9681697612732095,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08719221793770456,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6724838519192726,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9864518738204368,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9598778286824934,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03601,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.007507095173132,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 20.89994032730747,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 308.3809351859023,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.530835351274025,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 187303,
+      "role": "qualification",
+      "replay_sha256": "9d05798b8c63be4150a055e4498adc5e0616c56f56014cd3ca3d6963815c07c9",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 520.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 10.17729585399933,
+        "world_contacts": 0,
+        "known_fraction": 0.998884953430408,
+        "quality_met_fraction": 0.945231536140627,
+        "structure_recall": 1.0,
+        "structure_precision": 0.9696969696969697,
+        "ground_rmse_m": 0.08927200064694014,
+        "wire_clearance_min_m": 24.489580349511616,
+        "drone_separation_min_m": 29.697461909065744,
+        "energy_reserve_margin_min_wh": 301.94542690090555,
+        "max_step_m": 8.525348657142995,
+        "map_error_over_claim": 0.6951553492988226,
+        "map_error_within_2_sigma": 0.9854974704890388,
+        "position_within_2_sigma": 0.9436345966958212,
+        "passes_at_median": 2.348708805230051,
+        "image_gsd_p90_m": 0.03611,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 10.17729585399933,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.998884953430408,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.945231536140627,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9696969696969697,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08927200064694014,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6951553492988226,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9854974704890388,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9436345966958212,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03611,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.489580349511616,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 29.697461909065744,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 301.94542690090555,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.525348657142995,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 10701,
+      "role": "heldout",
+      "replay_sha256": "76cb26bad295216e837fdce3e122dff6c9b86a7a0c1505acb54d5cc4d51352fe",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 549.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 14.428592825621893,
+        "world_contacts": 0,
+        "known_fraction": 0.9976387249114522,
+        "quality_met_fraction": 0.950347632165814,
+        "structure_recall": 0.9979324603721571,
+        "structure_precision": 0.9682894149173739,
+        "ground_rmse_m": 0.08805514794018462,
+        "wire_clearance_min_m": 24.98256965669097,
+        "drone_separation_min_m": 29.774210513014545,
+        "energy_reserve_margin_min_wh": 303.55817791043114,
+        "max_step_m": 8.537931326489796,
+        "map_error_over_claim": 0.6831141706860797,
+        "map_error_within_2_sigma": 0.9874332815350314,
+        "position_within_2_sigma": 0.9662640566430654,
+        "passes_at_median": 2.501885466440706,
+        "image_gsd_p90_m": 0.03594,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 14.428592825621893,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9976387249114522,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.950347632165814,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9979324603721571,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9682894149173739,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08805514794018462,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6831141706860797,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9874332815350314,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9662640566430654,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03594,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.98256965669097,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 29.774210513014545,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 303.55817791043114,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.537931326489796,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 10702,
+      "role": "heldout",
+      "replay_sha256": "3ec3ecaff9ea38e602cf1931a26b49d6343759ddb42f8bc0a10afef96d3dadad",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 580.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 14.592553557298515,
+        "world_contacts": 0,
+        "known_fraction": 0.9952774498229043,
+        "quality_met_fraction": 0.9496261314443133,
+        "structure_recall": 0.9993108201240524,
+        "structure_precision": 0.9676991150442478,
+        "ground_rmse_m": 0.09152991714680737,
+        "wire_clearance_min_m": 21.82044440831243,
+        "drone_separation_min_m": 37.39382175235464,
+        "energy_reserve_margin_min_wh": 304.6970539480121,
+        "max_step_m": 8.525189664073851,
+        "map_error_over_claim": 0.7070101854839796,
+        "map_error_within_2_sigma": 0.985391586636007,
+        "position_within_2_sigma": 0.954046924892406,
+        "passes_at_median": 2.501885466440706,
+        "image_gsd_p90_m": 0.03594,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 14.592553557298515,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9952774498229043,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9496261314443133,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9993108201240524,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9676991150442478,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09152991714680737,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7070101854839796,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.985391586636007,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.954046924892406,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03594,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 21.82044440831243,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 37.39382175235464,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 304.6970539480121,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.525189664073851,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 10703,
+      "role": "heldout",
+      "replay_sha256": "f2234289f338cf7262606286bd9c4cd0049c60c6066d9a14440dce63b3147612",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 508.25,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 8.928678048598904,
+        "world_contacts": 0,
+        "known_fraction": 0.9954086317722681,
+        "quality_met_fraction": 0.9370326643053916,
+        "structure_recall": 0.9986216402481047,
+        "structure_precision": 0.9655942806076855,
+        "ground_rmse_m": 0.09361853852551091,
+        "wire_clearance_min_m": 22.168242067622653,
+        "drone_separation_min_m": 23.52898048199615,
+        "energy_reserve_margin_min_wh": 304.25502946435614,
+        "max_step_m": 8.532638402019185,
+        "map_error_over_claim": 0.7013723356738812,
+        "map_error_within_2_sigma": 0.9839880588913766,
+        "position_within_2_sigma": 0.9401638206302929,
+        "passes_at_median": 1.940237708668303,
+        "image_gsd_p90_m": 0.036070000000000005,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 8.928678048598904,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9954086317722681,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9370326643053916,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9986216402481047,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9655942806076855,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09361853852551091,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7013723356738812,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9839880588913766,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9401638206302929,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.036070000000000005,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 22.168242067622653,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 23.52898048199615,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 304.25502946435614,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.532638402019185,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 10704,
+      "role": "heldout",
+      "replay_sha256": "019e9f010865474328f583596a115a3124b62f23b47e588881190436e01d23a4",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 559.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 12.003474070277216,
+        "world_contacts": 0,
+        "known_fraction": 0.9969172241899514,
+        "quality_met_fraction": 0.9482487209759937,
+        "structure_recall": 0.9986216402481047,
+        "structure_precision": 0.9668874172185431,
+        "ground_rmse_m": 0.08994226034928854,
+        "wire_clearance_min_m": 25.00964753078421,
+        "drone_separation_min_m": 28.635180183262374,
+        "energy_reserve_margin_min_wh": 302.153158855848,
+        "max_step_m": 8.525669810322825,
+        "map_error_over_claim": 0.7142420378323454,
+        "map_error_within_2_sigma": 0.9872930043933762,
+        "position_within_2_sigma": 0.9659169790365125,
+        "passes_at_median": 2.501885466440706,
+        "image_gsd_p90_m": 0.03592,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 12.003474070277216,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9969172241899514,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9482487209759937,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9986216402481047,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9668874172185431,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08994226034928854,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7142420378323454,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9872930043933762,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9659169790365125,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03592,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.00964753078421,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 28.635180183262374,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 302.153158855848,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.525669810322825,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 10705,
+      "role": "heldout",
+      "replay_sha256": "301859a178e1670cd7c1b8f7df1f8cfa2544a178d382ed4a2cbff6908acc0f39",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 530.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 14.236727147918286,
+        "world_contacts": 0,
+        "known_fraction": 0.9976387249114522,
+        "quality_met_fraction": 0.9495605404696313,
+        "structure_recall": 1.0,
+        "structure_precision": 0.966651845264562,
+        "ground_rmse_m": 0.08981824752270112,
+        "wire_clearance_min_m": 24.98871980496376,
+        "drone_separation_min_m": 27.151313514047803,
+        "energy_reserve_margin_min_wh": 307.2937312650014,
+        "max_step_m": 8.526321986020015,
+        "map_error_over_claim": 0.7086324384409686,
+        "map_error_within_2_sigma": 0.984313725490196,
+        "position_within_2_sigma": 0.9731361932528113,
+        "passes_at_median": 2.3997676923002693,
+        "image_gsd_p90_m": 0.035930000000000004,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 14.236727147918286,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9976387249114522,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9495605404696313,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.966651845264562,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08981824752270112,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7086324384409686,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.984313725490196,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9731361932528113,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.035930000000000004,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.98871980496376,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 27.151313514047803,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 307.2937312650014,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.526321986020015,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 7,
+      "role": "tuning",
+      "replay_sha256": "65b9d6d8586755749c983a17718a53b1aadf415158b74c7e40f7f7d3c992a94f",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 491.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 9.688501853976653,
+        "world_contacts": 0,
+        "known_fraction": 0.9973107700380428,
+        "quality_met_fraction": 0.94464121736849,
+        "structure_recall": 1.0,
+        "structure_precision": 0.968070953436807,
+        "ground_rmse_m": 0.0906866793883111,
+        "wire_clearance_min_m": 17.095787939482857,
+        "drone_separation_min_m": 110.76350973380674,
+        "energy_reserve_margin_min_wh": 303.30287546806983,
+        "max_step_m": 8.525511687722092,
+        "map_error_over_claim": 0.7181758693073518,
+        "map_error_within_2_sigma": 0.9847993514389948,
+        "position_within_2_sigma": 0.9695265861446619,
+        "passes_at_median": 2.1444732569491767,
+        "image_gsd_p90_m": 0.03602,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 9.688501853976653,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9973107700380428,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.94464121736849,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.968070953436807,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.0906866793883111,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7181758693073518,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9847993514389948,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9695265861446619,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03602,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 17.095787939482857,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 110.76350973380674,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 303.30287546806983,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.525511687722092,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 42,
+      "role": "tuning",
+      "replay_sha256": "43aeecf730bd56b0be330930c3aced88548958be23cbb42bb62d0b5297cbe780",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 485.75,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 13.111271219575515,
+        "world_contacts": 0,
+        "known_fraction": 0.9984914075823167,
+        "quality_met_fraction": 0.9448379902925358,
+        "structure_recall": 0.9965541006202618,
+        "structure_precision": 0.9657625611382836,
+        "ground_rmse_m": 0.09055202870833817,
+        "wire_clearance_min_m": 25.009638220827185,
+        "drone_separation_min_m": 29.725133518208892,
+        "energy_reserve_margin_min_wh": 309.67269738765606,
+        "max_step_m": 8.527245185942654,
+        "map_error_over_claim": 0.7067590713502849,
+        "map_error_within_2_sigma": 0.9882765125993801,
+        "position_within_2_sigma": 0.9466194641121755,
+        "passes_at_median": 2.2976499181598324,
+        "image_gsd_p90_m": 0.03599,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 13.111271219575515,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9984914075823167,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9448379902925358,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9965541006202618,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9657625611382836,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09055202870833817,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7067590713502849,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9882765125993801,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9466194641121755,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03599,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.009638220827185,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 29.725133518208892,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 309.67269738765606,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.527245185942654,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 707,
+      "role": "tuning",
+      "replay_sha256": "41b033f6094d2cb2a4884ab696d328b456ce8cd064451cb8a399fd30e91099ef",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 490.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 13.271695114777568,
+        "world_contacts": 0,
+        "known_fraction": 0.9901613537977174,
+        "quality_met_fraction": 0.9185360094451004,
+        "structure_recall": 1.0,
+        "structure_precision": 0.9726088908845981,
+        "ground_rmse_m": 0.09192910560959877,
+        "wire_clearance_min_m": 24.091784894128597,
+        "drone_separation_min_m": 193.70233750082159,
+        "energy_reserve_margin_min_wh": 309.4002953369503,
+        "max_step_m": 8.525909908809389,
+        "map_error_over_claim": 0.7252739043155905,
+        "map_error_within_2_sigma": 0.9832356548998228,
+        "position_within_2_sigma": 0.949881993613772,
+        "passes_at_median": 2.0934143698789582,
+        "image_gsd_p90_m": 0.03604,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 13.271695114777568,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9901613537977174,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9185360094451004,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9726088908845981,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09192910560959877,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7252739043155905,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9832356548998228,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.949881993613772,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03604,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.091784894128597,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 193.70233750082159,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 309.4002953369503,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.525909908809389,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 1010,
+      "role": "tuning",
+      "replay_sha256": "e07bdaa92281c2df974ee71a064947a461756eb108fec38896e258bad1158d69",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 529.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 11.196349892008772,
+        "world_contacts": 0,
+        "known_fraction": 0.9981634527089073,
+        "quality_met_fraction": 0.9448379902925358,
+        "structure_recall": 0.9993108201240524,
+        "structure_precision": 0.966078697421981,
+        "ground_rmse_m": 0.09260981078018804,
+        "wire_clearance_min_m": 20.657305625272915,
+        "drone_separation_min_m": 94.85979569804218,
+        "energy_reserve_margin_min_wh": 303.6829932664472,
+        "max_step_m": 8.533828622369066,
+        "map_error_over_claim": 0.7236926752719395,
+        "map_error_within_2_sigma": 0.9817739975698664,
+        "position_within_2_sigma": 0.9645980841316119,
+        "passes_at_median": 2.246591031089614,
+        "image_gsd_p90_m": 0.03606,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 11.196349892008772,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9981634527089073,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9448379902925358,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9993108201240524,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.966078697421981,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09260981078018804,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7236926752719395,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9817739975698664,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9645980841316119,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03606,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 20.657305625272915,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 94.85979569804218,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 303.6829932664472,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.533828622369066,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 9002,
+      "role": "tuning",
+      "replay_sha256": "e9c7441c83e617161fba5d09b46756eb6bc646edae042b8c307fca71ab7fa74a",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 499.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 11.72443955679298,
+        "world_contacts": 0,
+        "known_fraction": 0.9973763610127246,
+        "quality_met_fraction": 0.9444444444444444,
+        "structure_recall": 0.9979324603721571,
+        "structure_precision": 0.9702836560108059,
+        "ground_rmse_m": 0.09178211523799085,
+        "wire_clearance_min_m": 19.42701823965126,
+        "drone_separation_min_m": 139.861761966918,
+        "energy_reserve_margin_min_wh": 306.72073228581985,
+        "max_step_m": 8.526566706176624,
+        "map_error_over_claim": 0.7260724176480939,
+        "map_error_within_2_sigma": 0.9823517479207519,
+        "position_within_2_sigma": 0.9458558933777592,
+        "passes_at_median": 1.9912965957385216,
+        "image_gsd_p90_m": 0.03608,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 11.72443955679298,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9973763610127246,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9444444444444444,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9979324603721571,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9702836560108059,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09178211523799085,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7260724176480939,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9823517479207519,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9458558933777592,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03608,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 19.42701823965126,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 139.861761966918,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 306.72073228581985,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.526566706176624,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 4451,
+      "role": "tuning",
+      "replay_sha256": "455f6fa53d2aada6b2f55f64e1ce90f8ffdca0b14aeaa42353a1baab0d947f60",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 511.25,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 9.230689800370824,
+        "world_contacts": 0,
+        "known_fraction": 0.9973107700380428,
+        "quality_met_fraction": 0.937360619178801,
+        "structure_recall": 0.9924190213645762,
+        "structure_precision": 0.9675122385402759,
+        "ground_rmse_m": 0.09201804387344474,
+        "wire_clearance_min_m": 18.992081946321182,
+        "drone_separation_min_m": 29.694926681330745,
+        "energy_reserve_margin_min_wh": 311.6012330355532,
+        "max_step_m": 8.538204578950772,
+        "map_error_over_claim": 0.7398512448285228,
+        "map_error_within_2_sigma": 0.9811499223025472,
+        "position_within_2_sigma": 0.9526586144661946,
+        "passes_at_median": 2.0423554828087402,
+        "image_gsd_p90_m": 0.03604,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 9.230689800370824,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9973107700380428,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.937360619178801,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9924190213645762,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9675122385402759,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.09201804387344474,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.7398512448285228,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9811499223025472,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9526586144661946,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03604,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 18.992081946321182,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 29.694926681330745,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 311.6012330355532,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.538204578950772,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 13127,
+      "role": "tuning",
+      "replay_sha256": "71782b8d465dd5c7836bb2a1f93482323739a18ef026cc8b9cb30543b731cb77",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 543.0,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 13.663224407925979,
+        "world_contacts": 0,
+        "known_fraction": 0.9967860422405876,
+        "quality_met_fraction": 0.9493637675455857,
+        "structure_recall": 0.9972432804962095,
+        "structure_precision": 0.9678714859437751,
+        "ground_rmse_m": 0.08838095053961212,
+        "wire_clearance_min_m": 25.00200337523259,
+        "drone_separation_min_m": 96.70155954547445,
+        "energy_reserve_margin_min_wh": 308.3257347995841,
+        "max_step_m": 8.522845822379201,
+        "map_error_over_claim": 0.6837553042546769,
+        "map_error_within_2_sigma": 0.9872141794073873,
+        "position_within_2_sigma": 0.9378731084270443,
+        "passes_at_median": 2.4508265793704878,
+        "image_gsd_p90_m": 0.03592,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 13.663224407925979,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9967860422405876,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9493637675455857,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9972432804962095,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9678714859437751,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08838095053961212,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6837553042546769,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9872141794073873,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9378731084270443,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03592,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 25.00200337523259,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 96.70155954547445,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 308.3257347995841,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.522845822379201,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 119107,
+      "role": "tuning",
+      "replay_sha256": "08181ef66979a0dae99d2fee3b0850534b2802f481555fac47057dd322ea742d",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 550.5,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 13.757775811267825,
+        "world_contacts": 0,
+        "known_fraction": 0.9986225895316805,
+        "quality_met_fraction": 0.9590056408238227,
+        "structure_recall": 0.9979324603721571,
+        "structure_precision": 0.9688612099644128,
+        "ground_rmse_m": 0.08569934026289065,
+        "wire_clearance_min_m": 24.257769002162302,
+        "drone_separation_min_m": 20.206491419571048,
+        "energy_reserve_margin_min_wh": 307.19809359390257,
+        "max_step_m": 8.525401901290612,
+        "map_error_over_claim": 0.6661120125593482,
+        "map_error_within_2_sigma": 0.9875521464136725,
+        "position_within_2_sigma": 0.9729973622101902,
+        "passes_at_median": 2.6040032405811435,
+        "image_gsd_p90_m": 0.035910000000000004,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 13.757775811267825,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9986225895316805,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9590056408238227,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9979324603721571,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9688612099644128,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08569934026289065,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6661120125593482,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9875521464136725,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9729973622101902,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.035910000000000004,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.257769002162302,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 20.206491419571048,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 307.19809359390257,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.525401901290612,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    },
+    {
+      "seed": 158701,
+      "role": "tuning",
+      "replay_sha256": "83b1bd786975f87017d7fbba0851ef2ce1c4a1e219136ae04cb20cc83271ff06",
+      "measured": {
+        "mission_complete": true,
+        "mission_complete_s": 513.75,
+        "final_phase": "complete",
+        "pois_complete_fraction": 1.0,
+        "home_radius_m": 14.292631139100907,
+        "world_contacts": 0,
+        "known_fraction": 0.9977043158861341,
+        "quality_met_fraction": 0.9521185884822249,
+        "structure_recall": 0.9965541006202618,
+        "structure_precision": 0.9699416778824586,
+        "ground_rmse_m": 0.08592873715097492,
+        "wire_clearance_min_m": 24.985887331024752,
+        "drone_separation_min_m": 19.57498178972126,
+        "energy_reserve_margin_min_wh": 302.6292277007146,
+        "max_step_m": 8.528312100940008,
+        "map_error_over_claim": 0.6708776923471694,
+        "map_error_within_2_sigma": 0.9850967698428754,
+        "position_within_2_sigma": 0.9607802304595308,
+        "passes_at_median": 2.1955321440193956,
+        "image_gsd_p90_m": 0.03602,
+        "run_profile": "field_v3",
+        "repeat_identical": true,
+        "drones_home": true
+      },
+      "gates": {
+        "mission_complete": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "pois_complete_fraction": {
+          "status": "pass",
+          "value": 1.0,
+          "min": 1.0
+        },
+        "drones_home": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        },
+        "home_radius_m": {
+          "status": "pass",
+          "value": 14.292631139100907,
+          "max": 15.0
+        },
+        "world_contacts": {
+          "status": "pass",
+          "value": 0,
+          "max": 0
+        },
+        "known_fraction": {
+          "status": "pass",
+          "value": 0.9977043158861341,
+          "min": 0.9
+        },
+        "quality_met_fraction": {
+          "status": "pass",
+          "value": 0.9521185884822249,
+          "min": 0.9
+        },
+        "structure_recall": {
+          "status": "pass",
+          "value": 0.9965541006202618,
+          "min": 0.9
+        },
+        "structure_precision": {
+          "status": "pass",
+          "value": 0.9699416778824586,
+          "min": 0.9
+        },
+        "ground_rmse_m": {
+          "status": "pass",
+          "value": 0.08592873715097492,
+          "max": 1.0
+        },
+        "map_error_over_claim": {
+          "status": "pass",
+          "value": 0.6708776923471694,
+          "max": 1.5
+        },
+        "map_error_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9850967698428754,
+          "min": 0.88
+        },
+        "position_within_2_sigma": {
+          "status": "pass",
+          "value": 0.9607802304595308,
+          "min": 0.88
+        },
+        "image_gsd_p90_m": {
+          "status": "pass",
+          "value": 0.03602,
+          "max": 0.04
+        },
+        "wire_clearance_min_m": {
+          "status": "pass",
+          "value": 24.985887331024752,
+          "min": 10.0
+        },
+        "drone_separation_min_m": {
+          "status": "pass",
+          "value": 19.57498178972126,
+          "min": 16.0
+        },
+        "energy_reserve_margin_min_wh": {
+          "status": "pass",
+          "value": 302.6292277007146,
+          "min": 0.0
+        },
+        "max_step_m": {
+          "status": "pass",
+          "value": 8.528312100940008,
+          "max": 12.0
+        },
+        "repeat_identical": {
+          "status": "pass",
+          "value": true,
+          "equals": true
+        }
+      },
+      "failed": [],
+      "passed": true
+    }
+  ],
+  "summary": {
+    "qualified": true,
+    "reasons": [],
+    "runs": 15,
+    "passed": 15,
+    "pass_fraction": 1.0,
+    "failures_by_gate": {},
+    "spread": {
+      "pois_complete_fraction": {
+        "min": 1.0,
+        "median": 1.0,
+        "max": 1.0,
+        "n": 15
+      },
+      "home_radius_m": {
+        "min": 8.095918862793583,
+        "median": 12.003474070277216,
+        "max": 14.685854789910238,
+        "n": 15
+      },
+      "world_contacts": {
+        "min": 0,
+        "median": 0,
+        "max": 0,
+        "n": 15
+      },
+      "known_fraction": {
+        "min": 0.9944903581267218,
+        "median": 0.9969828151646334,
+        "max": 0.998884953430408,
+        "n": 15
+      },
+      "quality_met_fraction": {
+        "min": 0.9370326643053916,
+        "median": 0.947527220254493,
+        "max": 0.95369277187459,
+        "n": 15
+      },
+      "structure_recall": {
+        "min": 0.9924190213645762,
+        "median": 0.9986216402481047,
+        "max": 1.0,
+        "n": 15
+      },
+      "structure_precision": {
+        "min": 0.9655942806076855,
+        "median": 0.9676991150442478,
+        "max": 0.9701159678858162,
+        "n": 15
+      },
+      "ground_rmse_m": {
+        "min": 0.08719221793770456,
+        "median": 0.09025053258215647,
+        "max": 0.09361853852551091,
+        "n": 15
+      },
+      "map_error_over_claim": {
+        "min": 0.663258151940032,
+        "median": 0.7013723356738812,
+        "max": 0.7340589537624501,
+        "n": 15
+      },
+      "map_error_within_2_sigma": {
+        "min": 0.9827330365573992,
+        "median": 0.9855710608318656,
+        "max": 0.9875809935205183,
+        "n": 15
+      },
+      "position_within_2_sigma": {
+        "min": 0.9302374010828821,
+        "median": 0.9518256282104679,
+        "max": 0.9731361932528113,
+        "n": 15
+      },
+      "image_gsd_p90_m": {
+        "min": 0.03592,
+        "median": 0.035980000000000005,
+        "max": 0.03611,
+        "n": 15
+      },
+      "wire_clearance_min_m": {
+        "min": 21.82044440831243,
+        "median": 24.990162375763926,
+        "max": 25.018696308406867,
+        "n": 15
+      },
+      "drone_separation_min_m": {
+        "min": 20.89994032730747,
+        "median": 28.635180183262374,
+        "max": 407.7183402186436,
+        "n": 15
+      },
+      "energy_reserve_margin_min_wh": {
+        "min": 299.7801357260645,
+        "median": 304.6970539480121,
+        "max": 308.3809351859023,
+        "n": 15
+      },
+      "max_step_m": {
+        "min": 8.01449362752885,
+        "median": 8.525669810322825,
+        "max": 10.257849773121261,
+        "n": 15
+      },
+      "mission_complete_s": {
+        "min": 488.5,
+        "median": 530.0,
+        "max": 580.0,
+        "n": 15
+      }
+    }
+  },
+  "limits": [
+    "A simulated qualification: the rig, LiDAR and camera models are assumed, not calibrated against hardware.",
+    "Truth is read to score the map and wire clearance, never by the run.",
+    "Station siting and the POIs' horizontal places come from the scenario generator.",
+    "Localization starts from the true pose plus noise; landing is a hover at the station."
+  ]
+}

@@ -2222,8 +2222,10 @@ impl AssembledRun {
             .and_then(|fault_return| fault_return.lost_position.as_ref())
             .map(|lost| lost.hold_sigma_m);
         let separation_surface = config.separation_surface;
+        let flown_handovers = config.flown_handovers;
         let wire_planning = wire_planning_config;
         let governed_map = handle.clone();
+        let (route_map, route_wires) = (handle.clone(), wire_planning.clone());
         let separation_wires =
             wire_planning
                 .clone()
@@ -2257,6 +2259,14 @@ impl AssembledRun {
             driver.set_fault_return(config.fault_return.clone());
             driver.set_flown_positions(flown_positions.clone());
             driver.set_follow_up(config.follow_up.clone());
+            driver.set_route_air(config.route_3d.clone().zip(mission_flights.clone()).map(
+                |(config, surface)| crate::route_air::RouteAir {
+                    config,
+                    map: route_map,
+                    surface,
+                    wires: route_wires,
+                },
+            ));
             driver.end_when_all_home(config.end_when_all_home);
             if let Some(flights) = &mission_flights {
                 // Each POI's height over the ground: declared by the
@@ -2381,6 +2391,7 @@ impl AssembledRun {
                     .with_blind_speed(blind_speed_mps)
                     .with_flown_positions(flown_positions.clone())
                     .with_lost_hold(lost_sigma_m)
+                    .with_flown_handovers(flown_handovers)
                 }),
             );
         }

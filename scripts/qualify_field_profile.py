@@ -66,7 +66,35 @@ FIELD_V2_SEEDS = {
     "heldout": [9901, 9902, 9903, 9904, 9905],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
-PROFILE_SEEDS = {"field_v1": FIELD_V1_SEEDS, "field_v2": FIELD_V2_SEEDS}
+#: ``field_v3``: the fourth set, chosen before its campaign ran (2026-11-23).
+#: The first (111409..121309, held out 10101..10105) failed the step gate on one
+#: seed, 119107: a drone handed to its explorer at the top of its climb was put
+#: where the explorer had run on to. The second (133403..143303, held out
+#: 10301..10305) qualified, on a build whose routes were then changed for what
+#: review found: a steep leg could step over a wire. The third (155401..165311,
+#: held out 10501..10505) failed the home gate on one seed, 158701: a route's last
+#: corners went by or round the pad. Those two are tuning seeds now.
+FIELD_V3_SEEDS = {
+    "qualification": [
+        177409,
+        178501,
+        179603,
+        180701,
+        181813,
+        182901,
+        184003,
+        185107,
+        186211,
+        187303,
+    ],
+    "heldout": [10701, 10702, 10703, 10704, 10705],
+    "tuning": [7, 42, 707, 1010, 9002, 4451, 13127, 119107, 158701],
+}
+PROFILE_SEEDS = {
+    "field_v1": FIELD_V1_SEEDS,
+    "field_v2": FIELD_V2_SEEDS,
+    "field_v3": FIELD_V3_SEEDS,
+}
 #: A site that has its own seeds, as ``(profile, site name)``. Montague City's
 #: second set, chosen before any of it was run (2026-11-23). The first
 #: (67421..77339, held out 9701..9705) failed on one seed, 74027, whose scan was
@@ -88,6 +116,25 @@ SITE_SEEDS = {
         ],
         "heldout": [10001, 10002, 10003, 10004, 10005],
         "tuning": [*FIELD_V2_SEEDS["tuning"], 74027],
+    },
+    # Its fourth set, chosen before any of it was run (2026-11-23). The first
+    # three (122401..132301, 144409..154303, 166403..176303, held out 10201..,
+    # 10401.., 10601..) passed on builds that no longer exist.
+    ("field_v3", "montague_city"): {
+        "qualification": [
+            188401,
+            189503,
+            190607,
+            191701,
+            192811,
+            193903,
+            195001,
+            196107,
+            197203,
+            198301,
+        ],
+        "heldout": [10801, 10802, 10803, 10804, 10805],
+        "tuning": FIELD_V3_SEEDS["tuning"],
     },
 }
 

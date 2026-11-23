@@ -17,6 +17,7 @@ preserve committed poses in checkpoint format 6. Legacy runs retain formats 4/5.
 | Starting with no world knowledge | **First slice** (#201–#208) | `--world-knowledge none`: range scanners, a checkpointed belief grid, stages 1, 3 and 4 planning on it, a physics guard; the map exports as a scene package. Pursuit now uses fused tracks (a tasking cue before the first). Search drones explore the frontier and scan progress reads the map. Still reading truth: the bundle builder's lane and POI planning (`docs/migration/UNKNOWN_WORLD.md`) |
 | Composed field mission (`--profile field_v1`) | **Implemented; qualified on one real site** (15 of 15 unseen seeds, fifth campaign) | One named set of the no-prior capabilities, with mission flights over the believed surface, truth-free setup (`blind_setup`), a declared scan gate and frozen thresholds (`docs/contracts/field_v1.thresholds.json`). Results and limits: [FIELD_PROFILE.md](migration/FIELD_PROFILE.md). Open: a second real site, calibrated sensor models |
 | Composed field mission v2 (`--profile field_v2`) | **Implemented; qualified on two real sites** (15 of 15 unseen seeds each) | `field_v1` plus view planning, images, the map report, return home on a lost sensor and plane heights: [FIELD_PROFILE.md](migration/FIELD_PROFILE.md). Open: without `--navigation` the map is built from true poses; calibrated sensor models, occlusion in placed images |
+| Composed field mission v3 (`--profile field_v3`) | **Implemented; qualified on two real sites** (15 of 15 unseen seeds each) | `field_v2` on estimated RTK positions, with a lost drone's hold and return, a follow up on the map, 3D routes and flown handovers ([record](performance/field-v3-qualification-2026-11-23.md)). Open: a recorded flight through the filter, real sensor numbers, sites with tall structures |
 | Viewer shell, projections and freshness | **Partial** | Shell, inspectors, Perspective/Top-down/Section, layer presets, Rust-worker controls and source-bound Review reports are implemented. Plan remains unavailable; complete freshness/history and operator acceptance remain open |
 | Qualified hardware adapters and deadlines | Planned S3–S7 | Actual SIL/HIL and device/clock/fault evidence; telemetry viewing grants no control |
 
@@ -118,7 +119,7 @@ Status labels:
 | Coordinator election | **Implemented** | `CoordinationManager.elect_coordinator()` is wired into `scan_map_inspect`. |
 | Drone deconfliction events | **Implemented** | `src/argusnet/planning/deconfliction.py` and sim replay events |
 | Blocking safety gate | **Implemented (opt-in)** | `--safety-blocking` runs after deconfliction, clamps commands, emits events, and holds Abort-state drones. |
-| 3D path planning | **Planned** | Current route planner is 2D; altitude is handled separately. In a no-prior run, `--belief-flights` holds mission flights above the believed surface with a height governor: a reactive floor, not a planned 3D route. |
+| 3D path planning | **Partial** | `field_v3` routes mission flights in three dimensions over the self-built map ([ROUTES_3D.md](migration/ROUTES_3D.md)). Otherwise the route planner is 2D; altitude is handled separately. In a no-prior run, `--belief-flights` holds mission flights above the believed surface with a height governor: a reactive floor, not a planned 3D route. |
 
 ## Evaluation, Benchmarking, Replay, And UI
 

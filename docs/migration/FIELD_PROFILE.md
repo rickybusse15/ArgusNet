@@ -385,7 +385,7 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
   jammed gimbal with fixed pointing).
 - No landing: home is a hover at the station.
 
-## `field_v3` (2026-11-23; limits frozen, not yet qualified)
+## `field_v3` (2026-11-23; qualified on two sites)
 
 `field_v2` flown on a survey-grade receiver's estimated positions
 ([NAVIGATION.md](NAVIGATION.md)), and:
@@ -394,8 +394,13 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - a drone that does not know where it is holds, and goes home if that lasts;
 - separation over the believed surface;
 - the fleet follows up on the map before it goes home, and a scan with every drone
-  home ends ([MAP_REPORT.md](MAP_REPORT.md)).
+  home ends ([MAP_REPORT.md](MAP_REPORT.md));
+- mission flights routed in three dimensions ([ROUTES_3D.md](ROUTES_3D.md));
+- a drone handed from one controller to another is flown to where it has it, at
+  1.25 times the speed asked (`flown_handovers`): an explorer that ran on while its
+  drone climbed had it up to three steps away.
 
 Limits: [field_v3.thresholds.json](../contracts/field_v3.thresholds.json),
-`field_v2`'s unchanged and `position_within_2_sigma`. The tuning seeds pass every
-gate on both sites (14 of 14). They are never counted.
+`field_v2`'s unchanged and `position_within_2_sigma`. It qualified 15 of 15
+on each site, on the fourth seed sets
+([record](../performance/field-v3-qualification-2026-11-23.md)).

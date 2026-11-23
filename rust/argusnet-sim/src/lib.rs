@@ -38,6 +38,7 @@ pub mod pursuit;
 pub mod range_scan;
 pub mod replay;
 pub mod rig;
+pub mod route_air;
 pub mod run_options;
 pub mod runtime_world;
 pub mod safety;
