@@ -568,6 +568,37 @@ impl ControllerStage {
         }
     }
 
+    /// Cap every mobile controller's speed to `speed_at` the lowest height
+    /// over the ground its own path keeps, or `agl_m` where it has none or
+    /// keeps more: what stays sharp from there (SR4). After the height caps,
+    /// before the first tick.
+    pub fn cap_speeds_at(&mut self, agl_m: f64, speed_at: impl Fn(f64) -> f64) {
+        let lowest = |lane: &LoopedWaypointPath, floor_m: f64| {
+            let config = lane.config();
+            (config.base_agl_m - config.vertical_amplitude_m.abs())
+                .max(config.min_agl_m)
+                .max(floor_m)
+        };
+        for (_, controller) in self.state.controllers.iter_mut() {
+            let (operational, floor_m) = match controller {
+                PlatformController::Static { .. } => continue,
+                PlatformController::Free(operational) => (operational, 0.0),
+                PlatformController::Launched {
+                    controller,
+                    profile,
+                    ..
+                } => (controller.operational_mut(), profile.min_operational_agl_m),
+            };
+            let height_m = match operational {
+                Operational::Search(lane) => lowest(lane, floor_m),
+                Operational::Explore(explorer) => lowest(explorer.lane(), floor_m),
+                Operational::SearchThenFollow(wrapper) => lowest(wrapper.search_mut(), floor_m),
+                Operational::Follow { .. } => agl_m,
+            };
+            operational.cap_speed(speed_at(height_m.min(agl_m)));
+        }
+    }
+
     /// How many controllers are frontier explorers.
     pub fn explorer_count(&self) -> usize {
         self.state

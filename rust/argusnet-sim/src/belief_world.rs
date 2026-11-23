@@ -966,17 +966,17 @@ impl BeliefGrid {
             return;
         };
         let [x, y, z] = pose.origin_m;
-        // Out to where the incidence limit meets ground twice as far below
-        // as what is under the camera; ground further down than that in the
-        // same image is left to the next one.
-        let Some(below) = self
-            .cell_of(x, y)
-            .map(|index| self.ground_value(index))
+        // Out to where the incidence limit meets the lowest ground measured:
+        // no cell further away can be in the image. Not from what is under
+        // the camera, which may itself be unseen.
+        let lowest = (0..self.cell_count())
+            .map(|k| self.ground_value(k))
             .filter(|ground| ground.is_finite())
-        else {
+            .fold(f64::INFINITY, f64::min);
+        if !lowest.is_finite() {
             return;
-        };
-        let reach_m = footprint.reach_m(2.0 * (z - below));
+        }
+        let reach_m = footprint.reach_m(z - lowest);
         let clamp = |v: f64, n: usize| (v.floor().max(0.0) as usize).min(n);
         let i0 = clamp((x - reach_m - self.x_min_m) / self.resolution_m, self.nx);
         let i1 = clamp(
@@ -3470,6 +3470,41 @@ mod tests {
         // Without a requirement, work is the unexplored share.
         let plain = belief.snapshot(&config);
         assert_eq!(plain.work_centres(0.5), plain.unexplored_centres(0.5));
+    }
+
+    /// An image counts for every measured cell in it, whether or not the cell
+    /// under the camera is measured, and for no unmeasured one.
+    #[test]
+    fn an_image_counts_with_the_ground_under_the_camera_unseen() {
+        use crate::imaging::{ImageFootprint, ImagePose, ImagingConfig};
+        let optics = crate::rig::CameraOptics {
+            horizontal_fov_deg: 60.0,
+            vertical_fov_deg: 45.0,
+            width_px: 4000,
+            height_px: 3000,
+        };
+        let mut belief = grid();
+        belief.track_quality(40.0);
+        belief.track_images(
+            ImageFootprint::new(&optics, &ImagingConfig::default()),
+            0.01,
+        );
+        let pose = ImagePose {
+            origin_m: [45.0, 45.0, 100.0],
+            world_camera: crate::pod::Quat::from_ypr(0.0, std::f64::consts::FRAC_PI_2, 0.0),
+        };
+        belief.integrate_image(&pose);
+        assert!(
+            belief.image_gsd_um10.iter().all(|&gsd| gsd == 0),
+            "nothing measured"
+        );
+        // Measured 20 m off; not under the camera.
+        belief.integrate(&scan(vec![ground(65.0, 45.0, 0.0)]), 1);
+        belief.integrate_image(&pose);
+        let at = |x, y| belief.image_gsd_um10[belief.cell_of(x, y).unwrap()];
+        let expected = 100.0 / crate::imaging::focal_px(&optics);
+        assert!((f64::from(at(65.0, 45.0)) * 1e-5 - expected).abs() < 2e-5);
+        assert_eq!(at(45.0, 45.0), 0, "unmeasured ground has no place in it");
     }
 
     /// A navigation camera frame is safety evidence: two detections make
