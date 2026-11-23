@@ -2185,7 +2185,7 @@ impl AssembledRun {
                 speed_mps,
                 dt_s,
                 quality,
-                config.scan.range_noise_m,
+                config.per_return_sigma_m(),
                 resolution_m * resolution_m,
             ),
             _ => None,
@@ -2199,6 +2199,13 @@ impl AssembledRun {
             .map(|fault_return| fault_return.blind_speed_mps);
         let wire_planning = wire_planning_config;
         let governed_map = handle.clone();
+        let separation_wires =
+            wire_planning
+                .clone()
+                .map(|config| crate::deconflict::SeparationWires {
+                    config,
+                    map: handle.clone(),
+                });
 
         // The platforms do not know the true obstacles, so the mission
         // driver must not route around them, nor keep clear of power lines
@@ -2286,6 +2293,7 @@ impl AssembledRun {
                 vertical_mps: flights.climb_mps,
             }
         }));
+        deconflict.set_separation_wires(separation_wires);
         // Nor are its pushes kept from lines it has not mapped.
         deconflict.set_power_lines(Vec::new());
 
@@ -3173,7 +3181,7 @@ impl AssembledRun {
             tick,
             timestamp_s: tick as f64 * self.dt_s,
             requirement,
-            per_return_sigma_m: config.scan.range_noise_m,
+            per_return_sigma_m: config.per_return_sigma_m(),
             finest_image_gsd_m: grid.finest_image_gsd_m(),
             evidence: grid.all_evidence(tick, self.dt_s),
             predicted: self.predicted_pass.clone(),

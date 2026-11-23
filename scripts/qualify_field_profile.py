@@ -54,17 +54,29 @@ FIELD_V1_SEEDS = {
     "heldout": [9401, 9402, 9403, 9404, 9405],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
-#: ``field_v2``: the second set, chosen before its campaign ran (2026-11-22).
+#: ``field_v2``: the third set, chosen before its campaign ran (2026-11-23).
 #: The first (45329..55291 by about 1100, held out 9501..9505) was stopped with
 #: five seeds scored, all passing, when review of the imaging code found two
-#: defects: a build that no longer exists is not evidence, so it counts for
-#: nothing. Its seeds informed no fix, but are not used again either.
+#: defects. The second (56393..66343, held out 9601..9605) qualified, on a build
+#: whose map claims and separation over wires were then changed for what tuning
+#: seeds showed at a second site: evidence for a build that no longer exists
+#: counts for nothing.
 FIELD_V2_SEEDS = {
-    "qualification": [56393, 57503, 58601, 59707, 60811, 61909, 63029, 64123, 65239, 66343],
-    "heldout": [9601, 9602, 9603, 9604, 9605],
+    "qualification": [78437, 79531, 80627, 81727, 82837, 83933, 85037, 86131, 87221, 88321],
+    "heldout": [9801, 9802, 9803, 9804, 9805],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
 PROFILE_SEEDS = {"field_v1": FIELD_V1_SEEDS, "field_v2": FIELD_V2_SEEDS}
+#: A site that has its own seeds, as ``(profile, site name)``. Montague City's
+#: first set, chosen before any of it was run (2026-11-23). Its tuning seeds
+#: are the profile's own: they were run on the site first, and never count.
+SITE_SEEDS = {
+    ("field_v2", "montague_city"): {
+        "qualification": [67421, 68531, 69623, 70729, 71837, 72931, 74027, 75133, 76231, 77339],
+        "heldout": [9701, 9702, 9703, 9704, 9705],
+        "tuning": FIELD_V2_SEEDS["tuning"],
+    },
+}
 
 
 def run_seed(binary: Path, config: dict, directory: Path, seed: int, profile: str) -> dict:
@@ -130,7 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.thresholds is None:
         args.thresholds = ROOT / f"docs/contracts/{args.profile}.thresholds.json"
-    chosen = PROFILE_SEEDS.get(args.profile)
+    site = args.site.resolve(strict=True)
+    canonical = json.loads(read_text_capped(site / "canonical.json"))
+    chosen = SITE_SEEDS.get((args.profile, canonical["name"]), PROFILE_SEEDS.get(args.profile))
     if chosen is None and None in (args.seeds, args.heldout_seeds, args.tuning_seeds):
         parser.error(f"no seeds chosen for {args.profile}: give all three sets")
     if args.seeds is None:
@@ -150,8 +164,6 @@ def main(argv: list[str] | None = None) -> int:
     if thresholds["profile"] != args.profile:
         parser.error(f"{args.thresholds} is for {thresholds['profile']}, not {args.profile}")
 
-    site = args.site.resolve(strict=True)
-    canonical = json.loads(read_text_capped(site / "canonical.json"))
     world = import_world(
         site / canonical["dem"],
         site / canonical["osm"],

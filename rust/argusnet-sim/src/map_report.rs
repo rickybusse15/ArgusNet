@@ -19,7 +19,8 @@
 use std::collections::BTreeMap;
 
 use argusnet_mapping::quality::{
-    assess, vertical_sigma_m, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
+    assess, centre_height_m, vertical_sigma_m, CellEvidence, DeficitCounts, DeficitReason,
+    QualityRequirement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -94,8 +95,9 @@ pub struct Achieved {
 }
 
 /// The map's claimed error against its true one, over cells with accepted
-/// returns. A cell's error is its accepted mean height less the true ground
-/// at its centre, so it includes how the returns fell within the cell.
+/// returns. A cell's error is its height (its accepted returns' plane at its
+/// centre, or their mean where none is fitted) less the true ground at its
+/// centre, so a mean's includes where in the cell the returns fell.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Calibration {
     pub cells: u64,
@@ -248,7 +250,7 @@ pub fn build(input: ReportInput<'_>) -> MapReport {
         let (mut one, mut two) = (0u64, 0u64);
         for &k in &accepted {
             let evidence = &input.evidence[k];
-            let error = evidence.accepted_height_sum_m / evidence.accepted_returns as f64
+            let error = centre_height_m(evidence).expect("accepted cells have a height")
                 - input.true_ground_m[k];
             let claimed = sigma(k);
             let z = error / claimed.max(1e-9);
@@ -420,6 +422,8 @@ mod tests {
             accepted_height_sq_sum_m2: n as f64 * height * height,
             accepted_age_s: (n > 0).then_some(0.0),
             image_gsd_m: None,
+            plane: None,
+            relief_m2: 0.0,
         }
     }
 

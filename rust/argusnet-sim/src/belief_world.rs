@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use argusnet_mapping::quality::{
-    assess, CellEvidence, DeficitCounts, DeficitReason, QualityRequirement,
+    assess, plane_fit, CellEvidence, DeficitCounts, DeficitReason, PlaneMoments, QualityRequirement,
 };
 use argusnet_mapping::wire_prior::PriorStatus;
 use argusnet_types::Bounds2d;
@@ -139,6 +139,12 @@ pub struct ExplorationConfig {
     /// their own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fault_return: Option<FaultReturnConfig>,
+    /// Take a cell's ground height from a plane through its accepted returns,
+    /// at the cell's centre, in place of the mean of its returns wherever in
+    /// it they fell; its claimed sigma is the plane's. Needs a quality
+    /// requirement.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plane_heights: bool,
     /// Write the map's report ([`crate::map_report`]) into the replay's
     /// `meta.map_report` when the run ends. Needs a quality requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -375,6 +381,19 @@ impl WirePlanningConfig {
 }
 
 impl ExplorationConfig {
+    /// The noise of one ground return, as the map's claims take it: the
+    /// rig's own LiDAR's with plane heights, whose claims state the rest of a
+    /// cell's scatter themselves; the scan's otherwise.
+    pub fn per_return_sigma_m(&self) -> f64 {
+        let lidar = self
+            .rig
+            .as_ref()
+            .filter(|_| self.plane_heights)
+            .and_then(|rig| rig.mount(crate::rig::SensorRole::Lidar))
+            .and_then(|mount| mount.lidar.as_ref());
+        lidar.map_or(self.scan.range_noise_m, |lidar| lidar.range_noise_m)
+    }
+
     /// The navigation camera the run flies: the rig's, or the stand-alone
     /// one.
     pub fn effective_nav_camera(&self) -> Option<NavCameraConfig> {
@@ -427,6 +446,7 @@ impl Default for ExplorationConfig {
             mission_flights: None,
             view_planning: None,
             imaging: None,
+            plane_heights: false,
             map_report: false,
             fault_return: None,
         }
@@ -529,6 +549,13 @@ impl ExplorationConfig {
                 );
             }
             fault_return.validate()?;
+        }
+        if self.plane_heights && self.quality.is_none() {
+            return Err(
+                "plane heights are fitted to a quality requirement's accepted returns: \
+                 they need one"
+                    .into(),
+            );
         }
         if self.map_report && self.quality.is_none() {
             return Err("a map report needs a quality requirement to report on".into());
@@ -638,6 +665,9 @@ pub struct BeliefGrid {
     accepted_sq_m2: Vec<f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     accepted_tick: Vec<i64>,
+    /// Per cell, where the accepted returns fell. Empty when not kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    accepted_plane: Vec<PlaneMoments>,
     /// The tick the quality was last published at, so a restored grid
     /// publishes the same ages. `None` without tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +800,7 @@ impl BeliefGrid {
             accepted_count: Vec::new(),
             accepted_sum_m: Vec::new(),
             accepted_sq_m2: Vec::new(),
+            accepted_plane: Vec::new(),
             accepted_tick: Vec::new(),
             quality_tick: None,
             image_footprint: None,
@@ -865,6 +896,7 @@ impl BeliefGrid {
             self.accepted_count.fill(0);
             self.accepted_sum_m.fill(0.0);
             self.accepted_sq_m2.fill(0.0);
+            self.accepted_plane.fill(PlaneMoments::default());
             self.accepted_tick.fill(-1);
             self.quality_tick = Some(0);
         }
@@ -898,6 +930,7 @@ impl BeliefGrid {
     /// meaningful under the admission policy that gathered it.
     pub fn same_quality_tracking(&self, other: &Self) -> bool {
         self.accept_incidence_deg == other.accept_incidence_deg
+            && self.accepted_plane.is_empty() == other.accepted_plane.is_empty()
             && self.image_footprint == other.image_footprint
     }
 
@@ -939,11 +972,59 @@ impl BeliefGrid {
     }
 
     fn ground_value(&self, index: usize) -> f64 {
+        if let Some(height) = self.plane_height(index) {
+            return height;
+        }
         if self.ground_count[index] > 0 {
             self.ground_sum[index] / self.ground_count[index] as f64
         } else {
             f64::NAN
         }
+    }
+
+    /// The plane through cell `index`'s accepted returns, at its centre, when
+    /// the map keeps where they fell and they fix one.
+    fn plane_height(&self, index: usize) -> Option<f64> {
+        let plane = *self.accepted_plane.get(index)?;
+        plane_fit(&CellEvidence {
+            accepted_returns: self.accepted_count[index],
+            accepted_height_sum_m: self.accepted_sum_m[index],
+            accepted_height_sq_sum_m2: self.accepted_sq_m2[index],
+            plane: Some(plane),
+            ..CellEvidence::default()
+        })
+        .map(|fit| fit.height_m)
+    }
+
+    /// The variance of the ground over cell `index` that the cells beside it
+    /// show, m², when the map keeps where returns fell and this cell's fix no
+    /// plane: a slope `g` over a cell of side `L` varies by `g² L²/12`. Zero
+    /// where too few are seen to say.
+    fn relief_m2(&self, index: usize) -> f64 {
+        if self.accepted_plane.is_empty()
+            || self.accepted_count[index] == 0
+            || self.plane_height(index).is_some()
+        {
+            return 0.0;
+        }
+        let (i, j) = (index % self.nx, index / self.nx);
+        let seen =
+            |i: usize, j: usize| Some(self.ground_value(j * self.nx + i)).filter(|z| z.is_finite());
+        // The rise per cell along one axis: across it, or to one side.
+        let rise = |low: Option<f64>, here: Option<f64>, high: Option<f64>| match (low, here, high)
+        {
+            (Some(low), _, Some(high)) => (high - low) / 2.0,
+            (Some(low), Some(here), None) => here - low,
+            (None, Some(here), Some(high)) => high - here,
+            _ => 0.0,
+        };
+        let here = seen(i, j);
+        let left = i.checked_sub(1).and_then(|i| seen(i, j));
+        let right = (i + 1 < self.nx).then(|| seen(i + 1, j)).flatten();
+        let below = j.checked_sub(1).and_then(|j| seen(i, j));
+        let above = (j + 1 < self.ny).then(|| seen(i, j + 1)).flatten();
+        let (east, north) = (rise(left, here, right), rise(below, here, above));
+        (east * east + north * north) / 12.0
     }
 
     fn blocks(&self) -> (usize, usize) {
@@ -1012,6 +1093,12 @@ impl BeliefGrid {
         self.accepted_sq_m2 = vec![0.0; cells];
         self.accepted_tick = vec![-1; cells];
         self.quality_tick = Some(0);
+    }
+
+    /// Keep where each cell's accepted returns fell, and give its height at
+    /// its centre from them. After [`Self::track_quality`], before any scan.
+    pub fn track_planes(&mut self) {
+        self.accepted_plane = vec![PlaneMoments::default(); self.cell_count()];
     }
 
     /// Keep each cell's finest image too (SR4). Before any scan.
@@ -1106,6 +1193,8 @@ impl BeliefGrid {
                 .get(index)
                 .filter(|&&gsd| gsd > 0)
                 .map(|&gsd| gsd as f64 * 1e-5),
+            plane: self.accepted_plane.get(index).copied(),
+            relief_m2: self.relief_m2(index),
         }
     }
 
@@ -1508,6 +1597,15 @@ impl BeliefGrid {
                             self.accepted_count[index] += 1;
                             self.accepted_sum_m[index] += z;
                             self.accepted_sq_m2[index] += z * z;
+                            if let Some(plane) = self.accepted_plane.get_mut(index) {
+                                let centre =
+                                    |k: usize, low: f64| low + (k as f64 + 0.5) * self.resolution_m;
+                                plane.add(
+                                    hit.point_m[0] - centre(index % self.nx, self.x_min_m),
+                                    hit.point_m[1] - centre(index / self.nx, self.y_min_m),
+                                    z,
+                                );
+                            }
                             self.accepted_tick[index] = tick as i64;
                         }
                     }
@@ -1603,11 +1701,11 @@ impl BeliefGrid {
         self.nx * self.ny
     }
 
-    /// Mean ground height of cell `(i, j)`, if any ground return landed there.
+    /// Ground height of cell `(i, j)`, if any ground return landed there: the
+    /// mean of its returns, or their plane at its centre ([`Self::track_planes`]).
     pub fn ground_ij(&self, i: usize, j: usize) -> Option<f64> {
         let index = j * self.nx + i;
-        (self.ground_count[index] > 0)
-            .then(|| self.ground_sum[index] / self.ground_count[index] as f64)
+        (self.ground_count[index] > 0).then(|| self.ground_value(index))
     }
 
     /// Centre of cell `(i, j)`, metres.

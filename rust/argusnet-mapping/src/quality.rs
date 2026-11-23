@@ -168,6 +168,116 @@ impl DeficitReason {
     }
 }
 
+/// Where a cell's accepted returns fell, as sums over them: east and north of
+/// the cell's centre, metres, and their products with each other and with the
+/// height. With [`CellEvidence`]'s count and height sums, enough to fit a
+/// plane to the cell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "[f64; 7]", into = "[f64; 7]")]
+pub struct PlaneMoments {
+    pub u: f64,
+    pub v: f64,
+    pub uu: f64,
+    pub uv: f64,
+    pub vv: f64,
+    pub uz: f64,
+    pub vz: f64,
+}
+
+impl From<[f64; 7]> for PlaneMoments {
+    fn from([u, v, uu, uv, vv, uz, vz]: [f64; 7]) -> Self {
+        Self {
+            u,
+            v,
+            uu,
+            uv,
+            vv,
+            uz,
+            vz,
+        }
+    }
+}
+
+impl From<PlaneMoments> for [f64; 7] {
+    fn from(m: PlaneMoments) -> Self {
+        [m.u, m.v, m.uu, m.uv, m.vv, m.uz, m.vz]
+    }
+}
+
+impl PlaneMoments {
+    /// One more return, `u`, `v` from the cell's centre, at height `z`.
+    pub fn add(&mut self, u: f64, v: f64, z: f64) {
+        self.u += u;
+        self.v += v;
+        self.uu += u * u;
+        self.uv += u * v;
+        self.vv += v * v;
+        self.uz += u * z;
+        self.vz += v * z;
+    }
+}
+
+/// A plane fitted to a cell's accepted returns, at the cell's centre.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlaneFit {
+    /// The height at the centre.
+    pub height_m: f64,
+    /// The returns' variance about the plane.
+    pub residual_m2: f64,
+    /// The centre height's variance over the returns': `1/n` with the
+    /// returns spread evenly about the centre, more the further from it
+    /// they fell.
+    pub leverage: f64,
+}
+
+/// The plane through a cell's accepted returns, at the centre. `None` without
+/// moments, with fewer returns than leave a residual, or with the returns so
+/// placed that a plane says less about the centre than one return there would
+/// (a single scan line off to one side).
+pub fn plane_fit(evidence: &CellEvidence) -> Option<PlaneFit> {
+    let m = evidence.plane.as_ref()?;
+    if evidence.accepted_returns < 4 {
+        return None;
+    }
+    let n = evidence.accepted_returns as f64;
+    let (u, v) = (m.u / n, m.v / n);
+    let z = evidence.accepted_height_sum_m / n;
+    let suu = m.uu - n * u * u;
+    let suv = m.uv - n * u * v;
+    let svv = m.vv - n * v * v;
+    let det = suu * svv - suv * suv;
+    // Returns in a line fix no slope across it.
+    if det <= 1e-9 * (suu + svv) * (suu + svv) {
+        return None;
+    }
+    let leverage = 1.0 / n + (svv * u * u - 2.0 * suv * u * v + suu * v * v) / det;
+    if !(leverage.is_finite() && leverage <= 1.0) {
+        return None;
+    }
+    let suz = m.uz - n * u * z;
+    let svz = m.vz - n * v * z;
+    let east = (svv * suz - suv * svz) / det;
+    let north = (suu * svz - suv * suz) / det;
+    let szz = evidence.accepted_height_sq_sum_m2 - n * z * z;
+    Some(PlaneFit {
+        height_m: z - east * u - north * v,
+        residual_m2: ((szz - east * suz - north * svz) / (n - 3.0)).max(0.0),
+        leverage,
+    })
+}
+
+/// A cell's height at its centre: its accepted returns' plane there, or their
+/// mean where no plane is fitted. `None` with no accepted return.
+pub fn centre_height_m(evidence: &CellEvidence) -> Option<f64> {
+    if evidence.accepted_returns == 0 {
+        return None;
+    }
+    Some(plane_fit(evidence).map_or(
+        evidence.accepted_height_sum_m / evidence.accepted_returns as f64,
+        |fit| fit.height_m,
+    ))
+}
+
 /// One cell's accepted evidence, as the map keeps it.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct CellEvidence {
@@ -183,6 +293,11 @@ pub struct CellEvidence {
     /// The finest accepted image's ground sample distance here, metres;
     /// `None` for none (SR4).
     pub image_gsd_m: Option<f64>,
+    /// Where the accepted returns fell; `None` when the map does not keep it.
+    pub plane: Option<PlaneMoments>,
+    /// With `plane` and none fitted: the variance of the ground over the cell
+    /// that its neighbours' heights show, m². Zero for none.
+    pub relief_m2: f64,
 }
 
 /// One cell's quality against a requirement.
@@ -196,10 +311,25 @@ pub struct CellQuality {
     pub vertical_sigma_m: Option<f64>,
 }
 
-/// One-sigma vertical uncertainty of a cell's mean height: the spread of its
+/// A plane's squared error at the centre of evenly sampled ground of constant
+/// curvature, over the variance that curvature leaves about the plane. Along
+/// one axis, `a u²` over a cell of side `L` has mean `a L²/12` (the plane's
+/// error at the centre) and variance `a² L⁴/180`: 180/144.
+pub const CURVATURE_VARIANCE: f64 = 1.25;
+
+/// One-sigma vertical uncertainty of a cell's height: the spread of its
 /// accepted returns (never taken below `per_return_sigma_m`, the sensor's
 /// declared range noise) over the root of their count, combined with the
 /// shared bias, which no count reduces.
+///
+/// With [`CellEvidence::plane`] it is the uncertainty of the height at the
+/// centre ([`centre_height_m`]). Where a plane is fitted, the spread is about
+/// the plane, the count is what the fit leaves at the centre, and what the
+/// returns scatter beyond their own noise is ground that is no plane
+/// ([`CURVATURE_VARIANCE`]), which no count reduces either. Where none is,
+/// the returns lie together somewhere in the cell, so their whole spread
+/// stands, or the relief its neighbours show if that is more: one return has
+/// no spread, and is no less a place on a slope.
 pub fn vertical_sigma_m(
     evidence: &CellEvidence,
     per_return_sigma_m: f64,
@@ -209,6 +339,14 @@ pub fn vertical_sigma_m(
     if n == 0 {
         return None;
     }
+    let floor_sq = per_return_sigma_m * per_return_sigma_m;
+    if let Some(fit) = plane_fit(evidence) {
+        let per_return_sq = fit.residual_m2.max(floor_sq);
+        let curved_sq = CURVATURE_VARIANCE * (fit.residual_m2 - floor_sq).max(0.0);
+        return Some(
+            (per_return_sq * fit.leverage + curved_sq + bias_floor_m * bias_floor_m).sqrt(),
+        );
+    }
     let count = n as f64;
     let spread_sq = if n >= 2 {
         let mean = evidence.accepted_height_sum_m / count;
@@ -216,7 +354,11 @@ pub fn vertical_sigma_m(
     } else {
         0.0
     };
-    let per_return_sq = spread_sq.max(per_return_sigma_m * per_return_sigma_m);
+    let (per_return_sq, count) = if evidence.plane.is_some() {
+        (spread_sq.max(floor_sq).max(evidence.relief_m2), 1.0)
+    } else {
+        (spread_sq.max(floor_sq), count)
+    };
     Some((per_return_sq / count + bias_floor_m * bias_floor_m).sqrt())
 }
 
@@ -350,6 +492,8 @@ mod tests {
             accepted_height_sq_sum_m2: n as f64 * height * height,
             accepted_age_s: (n > 0).then_some(age_s),
             image_gsd_m: None,
+            plane: None,
+            relief_m2: 0.0,
         }
     }
 
@@ -385,6 +529,109 @@ mod tests {
         let quality = assess(&evidence(8, 10.0, 0.0), area, 0.0, None, &equal);
         assert_eq!(quality.vertical_sigma_m, Some(0.5));
         assert_eq!(quality.reason, DeficitReason::Met);
+    }
+
+    /// Returns on a 20% slope, gathered on its uphill side: their mean is the
+    /// height where they fell, their plane the height at the centre, and the
+    /// plane's sigma is wider for being read away from them.
+    #[test]
+    fn a_plane_gives_the_centre_of_a_slope_the_returns_missed() {
+        let (mut plane, mut sum, mut sq, mut n) = (PlaneMoments::default(), 0.0, 0.0, 0u32);
+        for i in 0..4 {
+            for j in 0..4 {
+                let (u, v) = (1.0 + i as f64, j as f64 - 1.5);
+                let z = 50.0 + 0.2 * u;
+                plane.add(u, v, z);
+                sum += z;
+                sq += z * z;
+                n += 1;
+            }
+        }
+        let mut cell = CellEvidence {
+            accepted_height_sum_m: sum,
+            accepted_height_sq_sum_m2: sq,
+            ..evidence(n, 0.0, 0.0)
+        };
+        let mean_sigma = vertical_sigma_m(&cell, 0.3, 0.0).unwrap();
+        assert!((centre_height_m(&cell).unwrap() - 50.5).abs() < 1e-9);
+        cell.plane = Some(plane);
+        let fit = plane_fit(&cell).expect("sixteen returns over an area");
+        assert!((fit.height_m - 50.0).abs() < 1e-9, "{fit:?}");
+        assert!(fit.residual_m2 < 1e-9, "all on the plane: {fit:?}");
+        // 1/16 for the mean, 2.5² over the returns' 20 m² about theirs.
+        assert!((fit.leverage - (1.0 / 16.0 + 6.25 / 20.0)).abs() < 1e-9);
+        assert_eq!(centre_height_m(&cell), Some(fit.height_m));
+        let sigma = vertical_sigma_m(&cell, 0.3, 0.0).unwrap();
+        assert!((sigma - 0.3 * fit.leverage.sqrt()).abs() < 1e-9);
+        assert!(sigma > mean_sigma);
+    }
+
+    /// A bowl sampled evenly: the plane reads its centre high, by what the
+    /// claim says, however many returns there are.
+    #[test]
+    fn curved_ground_is_claimed_for_and_does_not_average_away() {
+        for per_side in [8, 40] {
+            let (mut plane, mut sum, mut sq) = (PlaneMoments::default(), 0.0, 0.0);
+            for i in 0..per_side {
+                for j in 0..per_side {
+                    let at = |k: usize| 10.0 * ((k as f64 + 0.5) / per_side as f64 - 0.5);
+                    let z = 20.0 + 0.02 * at(i) * at(i);
+                    plane.add(at(i), at(j), z);
+                    sum += z;
+                    sq += z * z;
+                }
+            }
+            let cell = CellEvidence {
+                accepted_height_sum_m: sum,
+                accepted_height_sq_sum_m2: sq,
+                plane: Some(plane),
+                ..evidence(per_side as u32 * per_side as u32, 0.0, 0.0)
+            };
+            let error = centre_height_m(&cell).unwrap() - 20.0;
+            let sigma = vertical_sigma_m(&cell, 0.0, 0.0).unwrap();
+            assert!(
+                (error / sigma - 1.0).abs() < 0.03,
+                "{error} m against a claimed {sigma} m"
+            );
+        }
+    }
+
+    /// One scan line fixes no slope across it, three returns leave no
+    /// residual, and a far corner says less of the centre than one return:
+    /// the mean stands in each.
+    #[test]
+    fn no_plane_is_fitted_where_the_returns_fix_none() {
+        let cell = |points: &[(f64, f64)]| {
+            let mut plane = PlaneMoments::default();
+            for (u, v) in points {
+                plane.add(*u, *v, 10.0);
+            }
+            CellEvidence {
+                plane: Some(plane),
+                ..evidence(points.len() as u32, 10.0, 0.0)
+            }
+        };
+        let line: Vec<_> = (0..8).map(|k| (k as f64 - 3.5, 2.0)).collect();
+        let corner: Vec<_> = (0..8)
+            .map(|k| (4.0 + 0.1 * (k % 4) as f64, 4.0 + 0.1 * (k / 4) as f64))
+            .collect();
+        for (why, points) in [
+            ("a line", &line[..]),
+            ("three", &[(0.0, 1.0), (1.0, 0.0), (-1.0, -1.0)][..]),
+            ("a corner", &corner[..]),
+        ] {
+            let cell = cell(points);
+            assert_eq!(plane_fit(&cell), None, "{why}");
+            assert_eq!(centre_height_m(&cell), Some(10.0), "{why}");
+            // Level returns, however many, claim the slope beside them.
+            assert_eq!(vertical_sigma_m(&cell, 0.3, 0.0), Some(0.3), "{why}");
+            let sloping = CellEvidence {
+                relief_m2: 4.0,
+                ..cell
+            };
+            assert_eq!(vertical_sigma_m(&sloping, 0.3, 0.0), Some(2.0), "{why}");
+        }
+        assert_eq!(centre_height_m(&CellEvidence::default()), None);
     }
 
     /// An image requirement is checked last, so a cell says what else it
@@ -431,6 +678,8 @@ mod tests {
             accepted_height_sq_sum_m2: 0.0 + 16.0,
             accepted_age_s: Some(0.0),
             image_gsd_m: None,
+            plane: None,
+            relief_m2: 0.0,
         };
         // Sample variance 8, over 2, plus bias²: sqrt(4.01).
         let s = vertical_sigma_m(&spread, 0.3, 0.1).unwrap();

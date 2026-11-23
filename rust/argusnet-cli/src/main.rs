@@ -322,6 +322,12 @@ struct SimArgs {
     /// (`efficient_v1`, `contingency_v1`).
     #[arg(long)]
     fault_return: bool,
+    /// Take a cell's ground height from a plane through its accepted returns,
+    /// at its centre, and claim what that plane leaves unsaid, in place of the
+    /// mean of its returns wherever they fell. Needs
+    /// `--quality-requirements`.
+    #[arg(long)]
+    plane_heights: bool,
     /// Write what the map was asked for against what it achieved to this
     /// JSON file when the run ends: the predicted pass, what the cells hold,
     /// the map's claimed error against its true one, and what was missed and
@@ -645,6 +651,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             (view_planning.is_some(), "--view-planning"),
             (imaging.is_some(), "--imaging"),
             (args.fault_return, "--fault-return"),
+            (args.plane_heights, "--plane-heights"),
             (args.belief_flights, "--belief-flights"),
             (
                 args.scan_coverage_threshold.is_some(),
@@ -758,6 +765,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                     .then(argusnet_sim::belief_world::WirePlanningConfig::default),
                 view_planning: view_planning.clone(),
                 imaging: imaging.clone(),
+                plane_heights: args.plane_heights,
                 fault_return: args
                     .fault_return
                     .then(argusnet_sim::belief_world::FaultReturnConfig::default),
@@ -1024,6 +1032,13 @@ fn sim(args: SimArgs) -> ExitCode {
         return fail(
             EXIT_INVALID,
             "--fault-return flies home over a self-built map: it needs --world-knowledge none",
+        );
+    }
+    if args.plane_heights && args.quality_requirements.is_none() && args.profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--plane-heights fits a quality requirement's accepted returns: it needs \
+             --quality-requirements",
         );
     }
     if args.map_report.is_some() && args.quality_requirements.is_none() && args.profile.is_none() {
