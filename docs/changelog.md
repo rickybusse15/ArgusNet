@@ -4,7 +4,8 @@
 
 - `--profile field_v3`: `field_v2` on estimated positions, with cells placed to
   0.5 m, a lost drone's hold and return, and separation over the believed
-  surface. Limits are frozen; it is not qualified yet.
+  surface. It qualifies on two sites, 15 of 15 unseen seeds each
+  (`docs/performance/field-v3-qualification-2026-11-23.md`).
   - Follow up (`follow_up`): the points inspected, the fleet goes back over what
     falls short of the map's requirement. Cells meeting it went from about 0.91
     to 0.94 (West Pleasant View) and 0.97 (Montague City), for up to 120 s.
