@@ -76,6 +76,9 @@ enum Command {
     /// Build a scene package (`smartscene-v1`) from a replay, as
     /// `argusnet build-scene` does, with no Python.
     BuildScene(BuildSceneArgs),
+    /// What a mission's declared sensors, batteries and limits say of it, before it
+    /// is flown. Exits 2 when they say it cannot be done.
+    Plan(PlanArgs),
     /// What is remembered of a site between missions, and what has changed.
     Site(SiteArgs),
     /// Run captured `IngestFrameRequest`s through the in-process fusion engine
@@ -95,6 +98,23 @@ struct BuildSceneArgs {
     /// A new or empty directory for the package.
     #[arg(long)]
     output: PathBuf,
+}
+
+#[derive(clap::Args)]
+#[command(group(clap::ArgGroup::new("plan_input").required(true).args(["bundle", "config"])))]
+struct PlanArgs {
+    /// The scenario bundle.
+    #[arg(long)]
+    bundle: Option<PathBuf>,
+    /// An `argusnet.scenario-config`.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// The profile it is to be flown under.
+    #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse)]
+    profile: argusnet_sim::run_options::RunProfile,
+    /// Write the plan as JSON, for the viewer's `--plan`.
+    #[arg(long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
@@ -1093,6 +1113,49 @@ fn keep_site(
     ))
 }
 
+fn plan(args: PlanArgs) -> ExitCode {
+    let text = match (&args.bundle, &args.config) {
+        (Some(path), _) => match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => return fail(EXIT_INVALID, format!("{}: {error}", path.display())),
+        },
+        // Blind, as a profile's setup is.
+        (None, Some(path)) => match built_bundle(path, true) {
+            Ok(bundle) => bundle.to_string(),
+            Err(code) => return code,
+        },
+        (None, None) => unreachable!("one of them is required"),
+    };
+    let bundle = match ScenarioBundle::from_json(&text) {
+        Ok(bundle) => bundle,
+        Err(error) => return fail(EXIT_INVALID, error),
+    };
+    let pool = std::sync::Arc::new(argusnet_sim::compute::ComputePool::serial());
+    let mut run = match assemble_with(&bundle, pool) {
+        Ok(run) => run,
+        Err(error) => return fail(EXIT_INVALID, error),
+    };
+    if let Err(error) = args.profile.options().apply(&mut run, &bundle) {
+        return fail(EXIT_INVALID, error);
+    }
+    let Some(plan) = run.mission_plan(&bundle, Some(args.profile.as_str().to_string())) else {
+        return fail(EXIT_UNSUPPORTED, "the scenario has no mission to plan");
+    };
+    if let Some(path) = &args.output {
+        let json = serde_json::to_string_pretty(&plan).expect("a plan serialises");
+        if let Err(error) = std::fs::write(path, json + "\n") {
+            return fail(EXIT_FAULT, format!("{}: {error}", path.display()));
+        }
+    }
+    for check in &plan.checks {
+        println!("{:?} {}: {}", check.status, check.name, check.detail);
+    }
+    if plan.status == argusnet_sim::plan_report::CheckStatus::Failed {
+        return fail(EXIT_INVALID, "the mission cannot be flown as declared");
+    }
+    ExitCode::SUCCESS
+}
+
 fn site(args: SiteArgs) -> ExitCode {
     match site_report(&args) {
         Ok(text) => {
@@ -1892,6 +1955,7 @@ fn main() -> ExitCode {
         Command::Sim(args) => sim(args),
         Command::Build(args) => build(args),
         Command::BuildScene(args) => build_scene(args),
+        Command::Plan(args) => plan(args),
         Command::Site(args) => site(args),
         Command::Fuse(args) => fuse(args),
         Command::Version => {

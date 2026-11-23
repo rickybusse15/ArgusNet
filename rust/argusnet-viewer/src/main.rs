@@ -87,6 +87,11 @@ struct Args {
                 in the scene: it starts paused; Run, Step, Speed and Reset drive it."
     )]
     run: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Show this mission plan (`argusnet-rs plan --output`) in the Plan workspace."
+    )]
+    plan: Option<PathBuf>,
     #[command(flatten)]
     run_options: RunOptionArgs,
     #[cfg(feature = "live-stream")]
@@ -248,6 +253,9 @@ fn parse_source_delay(text: &str) -> std::result::Result<(String, f64), String> 
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(plan) = &args.plan {
+        argusnet_viewer::ui::plan::give_plan(plan);
+    }
     if args.headless {
         let Some(scene) = args.scene.clone() else {
             anyhow::bail!("--scene is required for a headless render");

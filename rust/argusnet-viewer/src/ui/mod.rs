@@ -19,6 +19,7 @@ pub mod conditions;
 mod event;
 mod inspectors;
 mod layout;
+pub mod plan;
 mod platform;
 pub mod preferences;
 mod review;
@@ -215,6 +216,9 @@ pub fn viewer_ui_system(
         ),
         Region::Timeline => {
             section_operator_timeline(ui, &mut replay_state, &mut ui_state, sim.is_some())
+        }
+        Region::Rail if ui_state.workspace == crate::state::Workspace::Plan => {
+            plan::plan_rail(ui, &ui_state.plan)
         }
         Region::Rail if ui_state.workspace == crate::state::Workspace::Review => {
             review::review_rail(ui, &mut replay_state)

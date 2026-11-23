@@ -3722,6 +3722,10 @@ impl MissionDriverStage {
 
     /// The share of the map the scan must reach before it ends, in place
     /// of the scenario's. Before the first tick.
+    pub fn scan_coverage_threshold(&self) -> f64 {
+        self.machine.config().scan_coverage_threshold
+    }
+
     pub fn set_scan_coverage_threshold(&mut self, threshold: f64) {
         self.machine.set_scan_coverage_threshold(threshold);
     }
@@ -3737,6 +3741,11 @@ impl MissionDriverStage {
     }
 
     /// The POIs as constructed, before any rescore.
+    /// Each drone's station.
+    pub fn homes(&self) -> &BTreeMap<String, [f64; 3]> {
+        &self.homes
+    }
+
     pub fn pois(&self) -> &[InspectionPoi] {
         &self.initial_pois
     }
