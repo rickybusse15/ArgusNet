@@ -428,6 +428,17 @@ struct Aircraft {
     flown: Option<FlownOffset>,
 }
 
+impl Aircraft {
+    /// Seconds since its last fix; since the run began, with none yet.
+    fn fix_age_s(&self) -> f64 {
+        self.timestamp_s - self.last_fix_s.unwrap_or(0.0)
+    }
+}
+
+/// How well an aircraft that has never had a fix knows where it is, metres: not
+/// at all.
+const NO_POSITION_SIGMA_M: f64 = 1.0e6;
+
 /// Every aircraft's navigation, as a checkpoint keeps it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct NavigationState {
@@ -502,13 +513,14 @@ impl Navigation {
         let Some(aircraft) = self.state.aircraft.get_mut(node_id) else {
             return;
         };
+        let fix_age_s = aircraft.fix_age_s();
         let Some(filter) = aircraft.filter.as_ref() else {
+            let offset = aircraft.flown.unwrap_or_default();
+            self.flown
+                .set(node_id, offset, [NO_POSITION_SIGMA_M; 2], fix_age_s);
             return;
         };
         let sigmas = sigmas_of(filter);
-        let fix_age_s = aircraft
-            .last_fix_s
-            .map_or(0.0, |at| aircraft.timestamp_s - at);
         let (Some(rate), Some(flown)) = (self.config.correction_mps, aircraft.flown.as_mut())
         else {
             self.flown
@@ -538,14 +550,13 @@ impl Navigation {
         self.state = state;
         self.flown.clear();
         for (node_id, aircraft) in &self.state.aircraft {
-            if let Some(filter) = &aircraft.filter {
-                let offset = aircraft.flown.unwrap_or_default();
-                let fix_age_s = aircraft
-                    .last_fix_s
-                    .map_or(0.0, |at| aircraft.timestamp_s - at);
-                self.flown
-                    .set(node_id, offset, sigmas_of(filter), fix_age_s);
-            }
+            let offset = aircraft.flown.unwrap_or_default();
+            let sigmas = aircraft
+                .filter
+                .as_ref()
+                .map_or([NO_POSITION_SIGMA_M; 2], sigmas_of);
+            self.flown
+                .set(node_id, offset, sigmas, aircraft.fix_age_s());
         }
     }
 
@@ -787,7 +798,7 @@ mod tests {
     const DT_S: f64 = 0.25;
 
     /// A survey: legs with a turn at each end, a climb, and a hold.
-    fn flown(k: u64) -> ([f64; 3], [f64; 3]) {
+    fn flown_at(k: u64) -> ([f64; 3], [f64; 3]) {
         let at = |k: f64| {
             let t = k * DT_S;
             let leg = (t / 40.0).floor();
@@ -805,7 +816,7 @@ mod tests {
 
     fn run(navigation: &mut Navigation, node: &str, ticks: std::ops::Range<u64>) {
         for k in ticks {
-            let (position, velocity) = flown(k);
+            let (position, velocity) = flown_at(k);
             navigation.step(node, k, k as f64 * DT_S, position, velocity);
         }
     }
@@ -884,6 +895,34 @@ mod tests {
         run(&mut navigation, "drone", 640..700);
         let back = navigation.estimate("drone").unwrap();
         assert!(back.horizontal_sigma_m < 0.05, "{back:?}");
+    }
+
+    /// One that has never had a fix is as lost as can be, for as long as it has
+    /// flown, and stops being when one comes; a checkpoint says the same.
+    #[test]
+    fn no_fix_yet_is_lost() {
+        let mut navigation = Navigation::new(NavigationConfig::rtk(), 3).unwrap();
+        let flown = navigation.flown_positions();
+        navigation.set_gnss_out(BTreeSet::from(["drone".to_string()]));
+        for k in 0..=80u64 {
+            let (position, velocity) = flown_at(k);
+            navigation.step("drone", k, k as f64 * DT_S, position, velocity);
+            navigation.fly("drone", DT_S);
+        }
+        assert_eq!(flown.lost_for_s("drone", 5.0), Some(20.0));
+        assert_eq!(flown.margin_m("drone"), MAX_MARGIN_M);
+        let state = navigation.state().clone();
+        let mut restored = Navigation::new(NavigationConfig::rtk(), 3).unwrap();
+        restored.restore(state);
+        let again = restored.flown_positions();
+        assert_eq!(again.lost_for_s("drone", 5.0), Some(20.0));
+        navigation.set_gnss_out(BTreeSet::new());
+        for k in 81..=90u64 {
+            let (position, velocity) = flown_at(k);
+            navigation.step("drone", k, k as f64 * DT_S, position, velocity);
+            navigation.fly("drone", DT_S);
+        }
+        assert_eq!(flown.lost_for_s("drone", 5.0), None);
     }
 
     #[test]
@@ -1056,7 +1095,7 @@ mod tests {
             } else {
                 BTreeSet::new()
             });
-            let (believed, velocity) = flown(k);
+            let (believed, velocity) = flown_at(k);
             let truth = flown_positions.truth("drone", believed);
             navigation.step("drone", k, k as f64 * DT_S, truth, velocity);
             navigation.fly("drone", DT_S);
