@@ -2,6 +2,8 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Python inventory (P6.0, `docs/migration/PYTHON_INVENTORY.md`): the empty stubs are
+  gone, and every analysis module imports first and without the native library.
 - Planning jobs (P4.10d, P4.10e first slices): bounded work applied at a declared
   tick whatever the workers, checkpointed while pending. `--replan-routes` plans a
   mission flight again when the map closes its way (`docs/migration/PLANNING_JOBS.md`).

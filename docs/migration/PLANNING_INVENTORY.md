@@ -27,7 +27,7 @@ Transitive import closure from the four `[project.scripts]` entry points
 | `battery.py` | 249 | runtime (ported in P4.7a) |
 | `coordination.py` | 196 | runtime |
 | `frontier.py` | 135 | runtime |
-| `__init__.py`, `next_best_view.py`, `revisit.py` | 17 | orphan |
+| `__init__.py`, `next_best_view.py`, `revisit.py` | 17 | orphan (the last two removed, PYTHON_INVENTORY.md) |
 
 Runtime 3,247 · test-only 615 · orphan 17.
 
