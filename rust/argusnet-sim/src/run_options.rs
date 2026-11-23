@@ -71,9 +71,13 @@ pub const FIELD_V1_QUALITY: argusnet_mapping::quality::QualityRequirement =
         min_ground_density_per_m2: Some(0.03),
         max_vertical_sigma_m: Some(0.5),
         max_age_s: None,
+        max_image_gsd_m: None,
         max_incidence_deg: 40.0,
         bias_floor_m: 0.05,
     };
+
+/// The coarsest image `field_v2` accepts of a cell, metres a pixel.
+pub const FIELD_V2_IMAGE_GSD_M: f64 = 0.04;
 
 /// The share of the map's reachable cells that must meet
 /// [`FIELD_V1_QUALITY`] before `field_v1`'s scan ends.
@@ -121,7 +125,8 @@ pub enum RunProfile {
     /// planning; and a declared map requirement the scan must meet.
     FieldV1,
     /// [`RunProfile::FieldV1`] with view planning (SR5d): explorers cruise
-    /// to the deficit worth most per watt-hour instead of the nearest.
+    /// to the deficit worth most per watt-hour instead of the nearest; and
+    /// the pod's cameras modelled, with an image requirement (SR4).
     FieldV2,
 }
 
@@ -209,6 +214,11 @@ impl RunOptions {
         let mut options = Self::field_v1();
         let exploration = options.exploration.as_mut().expect("field_v1 explores");
         exploration.view_planning = Some(argusnet_planning::views::ViewPlanningConfig::default());
+        exploration.imaging = Some(crate::imaging::ImagingConfig::default());
+        exploration.quality = Some(argusnet_mapping::quality::QualityRequirement {
+            max_image_gsd_m: Some(FIELD_V2_IMAGE_GSD_M),
+            ..FIELD_V1_QUALITY
+        });
         options.profile = Some(RunProfile::FieldV2);
         options
     }

@@ -151,8 +151,8 @@ struct RunOptionArgs {
     /// Run a named profile, as `argusnet-rs sim --profile`: `field_v1` is
     /// the composed field mission (no prior map, the declared rig, measured
     /// power lines, mission flights over the believed surface, a declared
-    /// map requirement); `field_v2` adds view planning. It sets the energy profile, planning policy and
-    /// world knowledge itself.
+    /// map requirement); `field_v2` adds view planning and imaging. It sets
+    /// the energy profile, planning policy and world knowledge itself.
     #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse, requires = "run",
           conflicts_with_all = ["energy_profile", "planning_policy", "world_knowledge"])]
     profile: Option<argusnet_sim::run_options::RunProfile>,

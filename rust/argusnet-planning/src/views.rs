@@ -32,6 +32,13 @@ pub struct DeficitWeights {
     pub too_oblique: f64,
     pub sparse: f64,
     pub stale: f64,
+    /// Everything but a fine enough image (SR4).
+    #[serde(default = "default_image_coarse")]
+    pub image_coarse: f64,
+}
+
+fn default_image_coarse() -> f64 {
+    0.5
 }
 
 impl Default for DeficitWeights {
@@ -41,6 +48,7 @@ impl Default for DeficitWeights {
             too_oblique: 0.8,
             sparse: 0.5,
             stale: 0.7,
+            image_coarse: default_image_coarse(),
         }
     }
 }
@@ -148,7 +156,7 @@ impl Default for ViewPlanningConfig {
 impl ViewPlanningConfig {
     pub fn validate(&self) -> Result<(), String> {
         let w = &self.weights;
-        if [w.unseen, w.too_oblique, w.sparse, w.stale]
+        if [w.unseen, w.too_oblique, w.sparse, w.stale, w.image_coarse]
             .iter()
             .any(|v| !(v.is_finite() && *v >= 0.0))
         {

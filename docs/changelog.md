@@ -2,8 +2,13 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Imaging (SR4). `--imaging` models what the rig's cameras get at each
+  capture: sample distance, blur, obliquity, and why an image does not count.
+  A quality requirement may ask for `max_image_gsd_m`, which lowers and slows
+  the flight; cells lacking only that are `image_coarse_cells`. `field_v2` asks
+  for 4 cm. Without the flag nothing changes. See `docs/migration/IMAGING.md`.
 - Field profile v2 (in progress). `--profile field_v2` is `field_v1` plus
-  view planning. On West Pleasant View, over the eight seeds `field_v1` was
+  view planning and imaging. With view planning alone, on West Pleasant View, over the eight seeds `field_v1` was
   tuned on, it passes every `field_v1` gate and completes the mission 9% to
   36% sooner (median 19%). Not qualified: its thresholds are a draft and no
   campaign has run. `field_v1` is unchanged, byte for byte. See

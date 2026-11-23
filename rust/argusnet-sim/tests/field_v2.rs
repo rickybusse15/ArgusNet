@@ -57,7 +57,10 @@ fn the_profile_is_field_v1_and_what_it_adds() {
     // Everything but the additions and the name is field_v1's.
     let mut stripped = v2.clone();
     stripped.profile = v1.profile;
-    stripped.exploration.as_mut().unwrap().view_planning = None;
+    let exploration = stripped.exploration.as_mut().unwrap();
+    exploration.view_planning = None;
+    exploration.imaging = None;
+    exploration.quality.as_mut().unwrap().max_image_gsd_m = None;
     assert_eq!(stripped, v1);
 
     let bundle = bundle();

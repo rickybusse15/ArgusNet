@@ -134,6 +134,11 @@ pub struct ExplorationConfig {
     /// fix. Needs a rig and a quality requirement; cruise only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view_planning: Option<argusnet_planning::views::ViewPlanningConfig>,
+    /// Model the pod's cameras (SR4): each capture says what its images are
+    /// worth, and a requirement may ask for a ground sample distance. Needs
+    /// a rig.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imaging: Option<crate::imaging::ImagingConfig>,
     /// Measure wires instead of being told them (W1): sensors report noisy
     /// points and camera lines, never a span, and avoidance reads a hazard
     /// band built from the points. Absent is the oracle every run before it
@@ -373,6 +378,7 @@ impl Default for ExplorationConfig {
             uncertain_prior: None,
             mission_flights: None,
             view_planning: None,
+            imaging: None,
         }
     }
 }
@@ -463,6 +469,18 @@ impl ExplorationConfig {
                 return Err("view planning chooses the pointing; do not set one as well".into());
             }
             planning.validate()?;
+        }
+        if let Some(imaging) = &self.imaging {
+            if self.rig.is_none() {
+                return Err("imaging needs a rig with cameras on its pod".into());
+            }
+            imaging.validate()?;
+        } else if self
+            .quality
+            .as_ref()
+            .is_some_and(|quality| quality.max_image_gsd_m.is_some())
+        {
+            return Err("an image requirement needs the imaging model".into());
         }
         self.scan.validate()
     }
@@ -561,6 +579,16 @@ pub struct BeliefGrid {
     /// publishes the same ages. `None` without tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     quality_tick: Option<u64>,
+    /// How accepted visible images become evidence (SR4), and the finest
+    /// sample distance any flight gets, metres. `None` without an image
+    /// requirement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_footprint: Option<(crate::imaging::ImageFootprint, f64)>,
+    /// Per cell, the finest accepted image's ground sample distance in
+    /// hundredths of a millimetre, 0 for none. Empty without an image
+    /// requirement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    image_gsd_um10: Vec<u32>,
     /// The navigation camera's obstacle evidence (§8.4 of the sensing
     /// guide): per cell, the highest detection (meaningful where any landed)
     /// and its log-odds. Safety evidence only: it never makes a cell
@@ -681,6 +709,8 @@ impl BeliefGrid {
             accepted_sq_m2: Vec::new(),
             accepted_tick: Vec::new(),
             quality_tick: None,
+            image_footprint: None,
+            image_gsd_um10: Vec::new(),
             safety_top_m: Vec::new(),
             safety_log_odds: Vec::new(),
             unsettled_scans: 0,
@@ -775,6 +805,7 @@ impl BeliefGrid {
             self.accepted_tick.fill(-1);
             self.quality_tick = Some(0);
         }
+        self.image_gsd_um10.fill(0);
         self.safety_top_m = Vec::new();
         self.safety_log_odds = Vec::new();
         self.unsettled_scans = 0;
@@ -804,6 +835,7 @@ impl BeliefGrid {
     /// meaningful under the admission policy that gathered it.
     pub fn same_quality_tracking(&self, other: &Self) -> bool {
         self.accept_incidence_deg == other.accept_incidence_deg
+            && self.image_footprint == other.image_footprint
     }
 
     /// Whether `other` covers the same cells (for a checkpoint's check).
@@ -919,6 +951,66 @@ impl BeliefGrid {
         self.quality_tick = Some(0);
     }
 
+    /// Keep each cell's finest image too (SR4). Before any scan.
+    pub fn track_images(&mut self, footprint: crate::imaging::ImageFootprint, finest_gsd_m: f64) {
+        self.image_footprint = Some((footprint, finest_gsd_m));
+        self.image_gsd_um10 = vec![0; self.cell_count()];
+    }
+
+    /// Fuse an accepted visible image: every measured cell it covers, at the
+    /// map's own height there, keeps the finest sample distance it was seen
+    /// at. A cell with no ground yet has no place in an image. What stands
+    /// between the camera and the ground is not considered.
+    fn integrate_image(&mut self, pose: &crate::imaging::ImagePose) {
+        let Some((footprint, _)) = self.image_footprint else {
+            return;
+        };
+        let [x, y, z] = pose.origin_m;
+        // Out to where the incidence limit meets the lowest ground measured:
+        // no cell further away can be in the image. Not from what is under
+        // the camera, which may itself be unseen.
+        let lowest = (0..self.cell_count())
+            .map(|k| self.ground_value(k))
+            .filter(|ground| ground.is_finite())
+            .fold(f64::INFINITY, f64::min);
+        if !lowest.is_finite() {
+            return;
+        }
+        let reach_m = footprint.reach_m(z - lowest);
+        let clamp = |v: f64, n: usize| (v.floor().max(0.0) as usize).min(n);
+        let i0 = clamp((x - reach_m - self.x_min_m) / self.resolution_m, self.nx);
+        let i1 = clamp(
+            (x + reach_m - self.x_min_m) / self.resolution_m + 1.0,
+            self.nx,
+        );
+        let j0 = clamp((y - reach_m - self.y_min_m) / self.resolution_m, self.ny);
+        let j1 = clamp(
+            (y + reach_m - self.y_min_m) / self.resolution_m + 1.0,
+            self.ny,
+        );
+        for j in j0..j1 {
+            for i in i0..i1 {
+                let index = j * self.nx + i;
+                let ground = self.ground_value(index);
+                if !ground.is_finite() {
+                    continue;
+                }
+                let centre = [
+                    self.x_min_m + (i as f64 + 0.5) * self.resolution_m,
+                    self.y_min_m + (j as f64 + 0.5) * self.resolution_m,
+                    ground,
+                ];
+                if let Some(gsd_m) = footprint.gsd_at(pose, centre) {
+                    let gsd = ((gsd_m * 1e5).ceil() as u32).max(1);
+                    let best = &mut self.image_gsd_um10[index];
+                    if *best == 0 || gsd < *best {
+                        *best = gsd;
+                    }
+                }
+            }
+        }
+    }
+
     /// Record that the quality is published as of `tick`; a grid without
     /// tracking keeps none.
     pub fn mark_quality_tick(&mut self, tick: u64) {
@@ -946,6 +1038,11 @@ impl BeliefGrid {
                 .get(index)
                 .filter(|&&t| t >= 0 && accepted_returns > 0)
                 .map(|&t| (now as i64 - t).max(0) as f64 * dt_s),
+            image_gsd_m: self
+                .image_gsd_um10
+                .get(index)
+                .filter(|&&gsd| gsd > 0)
+                .map(|&gsd| gsd as f64 * 1e-5),
         }
     }
 
@@ -965,6 +1062,7 @@ impl BeliefGrid {
                     &self.evidence(k, now, dt_s),
                     area,
                     per_return_sigma_m,
+                    self.image_footprint.map(|(_, finest)| finest),
                     requirement,
                 )
                 .reason
@@ -1297,6 +1395,11 @@ impl BeliefGrid {
                 return;
             }
         }
+        let image_pose = scan
+            .pod
+            .as_ref()
+            .and_then(|pod| pod.images.as_ref())
+            .and_then(|images| images.visible_pose);
         self.integrate_wire_evidence(scan);
         for wire in &scan.wires {
             if !self.wires.contains_key(&wire.span.id) {
@@ -1365,6 +1468,10 @@ impl BeliefGrid {
                 }
             }
             self.touch(index, tick);
+        }
+        // After the returns, so the ground they measured is in the image.
+        if let Some(pose) = image_pose {
+            self.integrate_image(&pose);
         }
     }
 
@@ -1890,7 +1997,8 @@ fn deficit_weight(
         DeficitReason::TooOblique => weights.too_oblique,
         DeficitReason::Sparse => weights.sparse,
         DeficitReason::Stale => weights.stale,
-        DeficitReason::Met | DeficitReason::BiasLimited => 0.0,
+        DeficitReason::ImageCoarse => weights.image_coarse,
+        DeficitReason::Met | DeficitReason::BiasLimited | DeficitReason::ImageLimited => 0.0,
     }
 }
 
@@ -3305,6 +3413,7 @@ mod tests {
             min_ground_density_per_m2: Some(0.02),
             max_vertical_sigma_m: None,
             max_age_s: None,
+            max_image_gsd_m: None,
             max_incidence_deg: 30.0,
             bias_floor_m: 0.0,
         };
@@ -3361,6 +3470,41 @@ mod tests {
         // Without a requirement, work is the unexplored share.
         let plain = belief.snapshot(&config);
         assert_eq!(plain.work_centres(0.5), plain.unexplored_centres(0.5));
+    }
+
+    /// An image counts for every measured cell in it, whether or not the cell
+    /// under the camera is measured, and for no unmeasured one.
+    #[test]
+    fn an_image_counts_with_the_ground_under_the_camera_unseen() {
+        use crate::imaging::{ImageFootprint, ImagePose, ImagingConfig};
+        let optics = crate::rig::CameraOptics {
+            horizontal_fov_deg: 60.0,
+            vertical_fov_deg: 45.0,
+            width_px: 4000,
+            height_px: 3000,
+        };
+        let mut belief = grid();
+        belief.track_quality(40.0);
+        belief.track_images(
+            ImageFootprint::new(&optics, &ImagingConfig::default()),
+            0.01,
+        );
+        let pose = ImagePose {
+            origin_m: [45.0, 45.0, 100.0],
+            world_camera: crate::pod::Quat::from_ypr(0.0, std::f64::consts::FRAC_PI_2, 0.0),
+        };
+        belief.integrate_image(&pose);
+        assert!(
+            belief.image_gsd_um10.iter().all(|&gsd| gsd == 0),
+            "nothing measured"
+        );
+        // Measured 20 m off; not under the camera.
+        belief.integrate(&scan(vec![ground(65.0, 45.0, 0.0)]), 1);
+        belief.integrate_image(&pose);
+        let at = |x, y| belief.image_gsd_um10[belief.cell_of(x, y).unwrap()];
+        let expected = 100.0 / crate::imaging::focal_px(&optics);
+        assert!((f64::from(at(65.0, 45.0)) * 1e-5 - expected).abs() < 2e-5);
+        assert_eq!(at(45.0, 45.0), 0, "unmeasured ground has no place in it");
     }
 
     /// A navigation camera frame is safety evidence: two detections make
@@ -3763,6 +3907,7 @@ mod tests {
                 command_error_rad: 0.0,
                 boresight_world: [0.0, 0.0, -1.0],
                 occluded: 0,
+                images: None,
             });
             s
         };
