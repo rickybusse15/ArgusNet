@@ -138,6 +138,14 @@ impl Rerouter {
         self.board().restore(state.jobs);
     }
 
+    /// Plan `drone`'s flight no more: what was found is not to be flown.
+    pub fn leave_to_governor(&mut self, drone: &str) {
+        if let Some(flight) = self.flights.get_mut(drone) {
+            flight.open = false;
+        }
+        self.board().cancel(drone);
+    }
+
     /// The mission has written `command` at `tick`.
     pub fn note(&mut self, command: &OverrideCommand, tick: u64) {
         let (drone, flight) = match command {

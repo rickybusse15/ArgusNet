@@ -2574,6 +2574,19 @@ impl MissionDriverStage {
         }
     }
 
+    /// This run's flights as they will be flown: those the map has closed planned
+    /// again, and then all of them told apart.
+    fn settle_flights(
+        &mut self,
+        tick: u64,
+        dt_s: f64,
+        timestamp_s: f64,
+        mobile: &[(String, [f64; 3])],
+    ) {
+        self.replan_flights(tick, dt_s, timestamp_s, mobile);
+        self.stagger_departures();
+    }
+
     /// Fly again, round it, what the map has put something across; and look at
     /// the flights this run has set.
     fn replan_flights(
@@ -2598,6 +2611,22 @@ impl MissionDriverStage {
             let flight = landed
                 .outcome
                 .flight(at, timestamp_s, self.config.redirect_speed_mps);
+            // The router's air holds the wires the map measured. One across a
+            // wire the map was given is not flown, as none set out on is.
+            let given = flight.as_ref().is_some_and(|flight| {
+                let way = flight.way_m();
+                let legs: Vec<([f64; 3], [f64; 3])> = std::iter::once(at)
+                    .chain(way.iter().copied())
+                    .zip(way.iter().copied())
+                    .collect();
+                self.obstacles
+                    .as_ref()
+                    .is_some_and(|obstacles| obstacles.violates_lines(&legs))
+            });
+            let flight = flight.filter(|_| !given);
+            if given {
+                rerouter.leave_to_governor(&landed.drone);
+            }
             let command = match (&landed.outcome, flight) {
                 (crate::reroute::Outcome::Reroute { kind, .. }, Some(flight)) => Some(match kind {
                     crate::reroute::FlightKind::Poi => {
@@ -2619,7 +2648,11 @@ impl MissionDriverStage {
                 subject: Some(landed.drone.clone()),
                 selected: None,
                 candidates: Vec::new(),
-                reason: landed.outcome.reason(),
+                reason: if given {
+                    "crosses_a_given_wire"
+                } else {
+                    landed.outcome.reason()
+                },
                 detail: format!(
                     "{}: something mapped since it set out lies across its way; planned again \
                      on tick {}",
@@ -4241,8 +4274,7 @@ impl StageHandler for MissionDriverStage {
             );
         }
         self.publish_report();
-        self.stagger_departures();
-        self.replan_flights(context.tick, context.dt_s, timestamp_s, &mobile);
+        self.settle_flights(context.tick, context.dt_s, timestamp_s, &mobile);
         Ok(outcome)
     }
 
@@ -5991,6 +6023,171 @@ mod tests {
         assert!(!resumed.follow_mapped_wires());
         map.publish(map_of(span(13.0)));
         assert!(resumed.follow_mapped_wires());
+    }
+
+    /// A flat self-built map over which flights are replanned, with a tower across
+    /// the way of two drones home, and, where asked, a wire it was given.
+    fn replanning_driver(
+        homes: &[(&str, [f64; 3])],
+        given: Option<PowerLine>,
+    ) -> (MissionDriverStage, crate::belief_world::BeliefHandle) {
+        use crate::belief_world::{BeliefGrid, BeliefHandle, ExplorationConfig};
+        let bounds = Bounds2d::new(-1000.0, 1000.0, -1000.0, 1000.0);
+        let config = ExplorationConfig::default();
+        let map = |tower: bool| {
+            use crate::range_scan::{RangeReturn, RangeScan, ReturnClass};
+            let mut grid = BeliefGrid::new(bounds, 10.0, 0.0).unwrap();
+            let hit = |x: f64, y: f64, z: f64, class| RangeReturn {
+                point_m: [x, y, z],
+                class,
+                acquired_offset_s: None,
+                acquired_from_m: None,
+            };
+            let mut returns: Vec<RangeReturn> = (0..40_000)
+                .map(|k| {
+                    let (i, j) = (f64::from(k % 200), f64::from(k / 200));
+                    hit(
+                        -995.0 + 10.0 * i,
+                        -995.0 + 10.0 * j,
+                        0.0,
+                        ReturnClass::Ground,
+                    )
+                })
+                .collect();
+            if tower {
+                returns.extend((0..12).map(|_| hit(5.0, 5.0, 150.0, ReturnClass::Structure)));
+            }
+            grid.integrate(
+                &RangeScan {
+                    node_id: "d".into(),
+                    timestamp_s: 0.0,
+                    origin_m: [0.0, 0.0, 100.0],
+                    returns,
+                    misses: 0,
+                    wires: Vec::new(),
+                    sensor: Default::default(),
+                    pod: None,
+                    pose: None,
+                    wire_points: Vec::new(),
+                    wire_lines: Vec::new(),
+                },
+                0,
+            );
+            if let Some(wire) = &given {
+                grid.know_wires(vec![wire.clone()]);
+            }
+            grid.snapshot(&config)
+        };
+        let handle = BeliefHandle::new(map(false));
+        let homes = homes
+            .iter()
+            .map(|(id, home)| (id.to_string(), *home))
+            .collect();
+        let mut stage = MissionDriverStage::new(MissionDriverConfig::default(), Vec::new(), homes);
+        stage.set_policy(PlanningPolicy::EfficientV1).unwrap();
+        stage.set_mapped_power_lines(Some(handle.clone()), bounds);
+        stage.follow_mapped_wires();
+        stage
+            .set_route_air(Some(crate::route_air::RouteAir {
+                config: argusnet_planning::route3d::Route3dConfig {
+                    replan: Some(argusnet_planning::route3d::ReplanConfig {
+                        check_s: 1.0,
+                        latency_s: 1.0,
+                        capacity: 4,
+                    }),
+                    ..Default::default()
+                },
+                map: handle.clone(),
+                surface: Default::default(),
+                wires: Some(Default::default()),
+            }))
+            .unwrap();
+        let towered = BeliefHandle::new(map(true));
+        (stage, towered)
+    }
+
+    /// A way round a tower that lies across a wire the map was given is not
+    /// flown: the router's air does not hold that wire, and the mission does.
+    #[test]
+    fn a_replanned_flight_keeps_off_a_wire_the_map_was_given() {
+        // Across the way beyond the tower, at the height it is flown.
+        let wire = PowerLine {
+            id: "given".into(),
+            ..power_line(&[-100.0, 100.0], 52.0, &[0.0]).span_line(0)
+        };
+        for (given, flown) in [(None, true), (Some(wire), false)] {
+            let start = [-400.0, 5.0, 50.0];
+            let (mut stage, towered) = replanning_driver(&[("a", [400.0, 5.0, 50.0])], given);
+            let mobile = vec![("a".to_string(), start)];
+            let flight = GotoHover::redirect(start, [400.0, 5.0], 50.0, 0.0, 20.0);
+            stage
+                .override_commands
+                .push(OverrideCommand::SetEgress("a".into(), flight));
+            stage.replan_flights(0, 0.5, 0.0, &mobile);
+            stage.override_commands.clear();
+            let map = stage.route_air.as_ref().unwrap().map.clone();
+            map.publish((*towered.current()).clone());
+            for tick in 2..12 {
+                stage.replan_flights(tick, 0.5, 0.5 * tick as f64, &mobile);
+            }
+            let set: Vec<_> = stage.take_override_commands();
+            assert_eq!(!set.is_empty(), flown, "{set:?}");
+            let reasons: Vec<_> = stage.decisions().iter().map(|d| d.reason).collect();
+            let expected = if flown {
+                "map_changed"
+            } else {
+                "crosses_a_given_wire"
+            };
+            assert_eq!(reasons, [expected], "once, and left alone after");
+        }
+    }
+
+    /// Two flights replanned together are told apart as two set out on together
+    /// are.
+    #[test]
+    fn replanned_flights_are_told_apart_with_the_rest() {
+        let (mut stage, towered) = replanning_driver(
+            &[("a", [400.0, 5.0, 50.0]), ("b", [5.0, 400.0, 50.0])],
+            None,
+        );
+        let map = stage.route_air.as_ref().unwrap().map.clone();
+        stage.believed_pois = Some(BelievedPois {
+            map: map.clone(),
+            hover_agl_m: BTreeMap::new(),
+            clearance_m: 8.0,
+        });
+        // To the middle at the same time, where the tower turns out to be.
+        let mobile = vec![
+            ("a".to_string(), [-400.0, 5.0, 50.0]),
+            ("b".to_string(), [5.0, -400.0, 50.0]),
+        ];
+        let homes = stage.homes.clone();
+        for (id, at) in &mobile {
+            let home = homes[id];
+            let flight = GotoHover::redirect(*at, [home[0], home[1]], home[2], 0.0, 20.0);
+            stage
+                .override_commands
+                .push(OverrideCommand::SetEgress(id.clone(), flight));
+        }
+        stage.replan_flights(0, 0.5, 0.0, &mobile);
+        stage.override_commands.clear();
+        stage.decisions.clear();
+        map.publish((*towered.current()).clone());
+        for tick in 2..6 {
+            stage.settle_flights(tick, 0.5, 0.5 * tick as f64, &mobile);
+        }
+        let flights: Vec<GotoHover> = stage
+            .take_override_commands()
+            .into_iter()
+            .map(|command| match command {
+                OverrideCommand::SetEgress(_, flight) => flight,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(flights.len(), 2, "both replanned");
+        let kinds: Vec<_> = stage.decisions().iter().map(|d| d.kind).collect();
+        assert!(kinds.contains(&"departure_staggered"), "{kinds:?}");
+        assert!(closest_approach_m(&flights[0], &flights[1]) >= DEPARTURE_SEPARATION_M);
     }
 
     /// one whose way home is clear keeps its flight, and a drone still at
