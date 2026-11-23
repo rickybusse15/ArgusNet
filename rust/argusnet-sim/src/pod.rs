@@ -765,6 +765,63 @@ impl PodSensing {
         2.0 * height_m.max(0.0) * (self.lidar.horizontal_fov_deg.to_radians() / 2.0).tan()
     }
 
+    /// What one nadir pass at `agl_m` and `speed_mps`, a capture every
+    /// `interval_s`, should leave on flat ground: rays the requirement
+    /// accepts and the LiDAR reaches, each counted by its chance of
+    /// returning.
+    pub fn predicted_pass(
+        &self,
+        agl_m: f64,
+        speed_mps: f64,
+        interval_s: f64,
+        requirement: &argusnet_mapping::quality::QualityRequirement,
+        per_return_sigma_m: f64,
+        cell_area_m2: f64,
+    ) -> Option<crate::map_report::PassPrediction> {
+        if !(agl_m > 0.0 && speed_mps > 0.0 && interval_s > 0.0) {
+            return None;
+        }
+        let limit = requirement.max_incidence_deg.to_radians();
+        let half = (self.lidar.horizontal_fov_deg.to_radians() / 2.0).min(limit);
+        let swath_m = 2.0 * agl_m * half.tan();
+        let sensor = PointingPolicy::Nadir
+            .commanded_body(0.0, 0.0)
+            .then(Quat::from_ypr_deg(self.lidar_mount.rotation_ypr_deg));
+        let returns: f64 = self
+            .sensor_rays()
+            .into_iter()
+            .filter_map(|ray| {
+                let down = -sensor.rotate(ray)[2];
+                if down < limit.cos().max(1e-6) {
+                    return None;
+                }
+                let range = agl_m / down;
+                if range > self.lidar.max_range_m {
+                    return None;
+                }
+                Some(self.lidar.returns.as_ref().map_or(1.0, |model| {
+                    let reflectivity = model.reflectivity_of("terrain").unwrap_or(0.1);
+                    model.detection_probability(reflectivity, down, range)
+                        * (1.0 - model.dropout_probability)
+                }))
+            })
+            .sum();
+        let density_per_m2 = returns / (swath_m * speed_mps * interval_s);
+        let count = (density_per_m2 * cell_area_m2).max(1.0);
+        let bias = requirement.bias_floor_m;
+        Some(crate::map_report::PassPrediction {
+            agl_m,
+            speed_mps,
+            swath_m,
+            density_per_m2,
+            vertical_sigma_m: (per_return_sigma_m * per_return_sigma_m / count + bias * bias)
+                .sqrt(),
+            image_gsd_m: self
+                .visible_optics()
+                .map(|optics| agl_m / crate::imaging::focal_px(optics)),
+        })
+    }
+
     /// Unit rays across the LiDAR's rectangle in its own frame, row by row
     /// from the top, left to right.
     pub fn sensor_rays(&self) -> Vec<[f64; 3]> {

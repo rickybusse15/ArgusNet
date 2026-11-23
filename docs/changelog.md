@@ -2,6 +2,11 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Map report. `argusnet-rs sim --map-report FILE` writes what the map was asked
+  for against what it achieved: the predicted pass, what cells hold, the map's
+  claimed error against its true one, and what was missed and why. `field_v2`
+  records it as `meta.map_report`, and the viewer's map readout shows the share
+  met and what the rest lack. See `docs/migration/MAP_REPORT.md`.
 - Imaging (SR4). `--imaging` models what the rig's cameras get at each
   capture: sample distance, blur, obliquity, and why an image does not count.
   A quality requirement may ask for `max_image_gsd_m`, which lowers and slows

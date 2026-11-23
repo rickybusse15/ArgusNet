@@ -316,6 +316,12 @@ struct SimArgs {
     /// default. Implies `--view-planning`.
     #[arg(long)]
     view_planning_profile: Option<PathBuf>,
+    /// Write what the map was asked for against what it achieved to this
+    /// JSON file when the run ends: the predicted pass, what the cells hold,
+    /// the map's claimed error against its true one, and what was missed and
+    /// why. Needs a quality requirement (a profile has one).
+    #[arg(long)]
+    map_report: Option<PathBuf>,
     /// With `--rig-profile`, model the pod's cameras (SR4): each capture says
     /// its images' ground sample distance, blur, obliquity and why one does
     /// not count. No pixels. `--quality-requirements` may then ask for
@@ -1004,6 +1010,13 @@ fn sim(args: SimArgs) -> ExitCode {
              --rig-profile and --quality-requirements, and replaces --pointing",
         );
     }
+    if args.map_report.is_some() && args.quality_requirements.is_none() && args.profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--map-report reports on a quality requirement: it needs --quality-requirements \
+             or --profile",
+        );
+    }
     if (args.imaging || args.imaging_profile.is_some()) && args.rig_profile.is_none() {
         return fail(
             EXIT_INVALID,
@@ -1400,6 +1413,27 @@ fn sim(args: SimArgs) -> ExitCode {
         .stage_timings()
         .map(|timings| timings.summaries())
         .unwrap_or_default();
+    if let Some(path) = &args.map_report {
+        let Some(report) = run.map_report() else {
+            return fail(
+                EXIT_FAULT,
+                "--map-report: the run keeps no map with a quality requirement",
+            );
+        };
+        let json = serde_json::to_string_pretty(&report).expect("a report serialises");
+        if let Err(error) = std::fs::write(path, json + "\n") {
+            return fail(EXIT_FAULT, format!("{}: {error}", path.display()));
+        }
+        if !args.quiet {
+            let missed: u64 = report.missed.iter().map(|m| m.cells).sum();
+            println!(
+                "map report: {:.1}% of {} cells met, {missed} missed -> {}",
+                report.achieved.met_fraction * 100.0,
+                report.cells,
+                path.display()
+            );
+        }
+    }
     let replay_started = Instant::now();
     let replay = match run.run_to_replay() {
         Ok(replay) => replay,

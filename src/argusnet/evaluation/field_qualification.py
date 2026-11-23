@@ -143,6 +143,10 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
     mission = last.get("scan_mission_state") or {}
     belief = (last.get("mapping_state") or {}).get("belief") or {}
     quality = belief.get("quality") or {}
+    report = meta.get("map_report") or {}
+    calibration = report.get("calibration") or {}
+    achieved = report.get("achieved") or {}
+    image_gsd = achieved.get("image_gsd_m") or {}
 
     phases = [(frame.get("scan_mission_state") or {}).get("phase") for frame in frames]
     complete_at = next((i for i, phase in enumerate(phases) if phase == "complete"), None)
@@ -209,6 +213,12 @@ def measure(replay: dict[str, Any]) -> dict[str, Any]:
         "drone_separation_min_m": separation,
         "energy_reserve_margin_min_wh": margin,
         "max_step_m": max_step,
+        # From the map's own report (profiles that write one): its true error
+        # over what it claims, and what one pass left against the prediction.
+        "map_error_over_claim": calibration.get("normalized_rms"),
+        "map_error_within_2_sigma": calibration.get("within_2_sigma"),
+        "passes_at_median": achieved.get("passes_at_median"),
+        "image_gsd_p90_m": image_gsd.get("p90"),
         "run_profile": (meta.get("run_profile") or {}).get("id"),
     }
 

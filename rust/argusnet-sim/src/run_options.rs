@@ -127,6 +127,7 @@ pub enum RunProfile {
     /// [`RunProfile::FieldV1`] with view planning (SR5d): explorers cruise
     /// to the deficit worth most per watt-hour instead of the nearest; and
     /// the pod's cameras modelled, with an image requirement (SR4).
+    /// Its replay carries the map's report.
     FieldV2,
 }
 
@@ -214,6 +215,7 @@ impl RunOptions {
         let mut options = Self::field_v1();
         let exploration = options.exploration.as_mut().expect("field_v1 explores");
         exploration.view_planning = Some(argusnet_planning::views::ViewPlanningConfig::default());
+        exploration.map_report = true;
         exploration.imaging = Some(crate::imaging::ImagingConfig::default());
         exploration.quality = Some(argusnet_mapping::quality::QualityRequirement {
             max_image_gsd_m: Some(FIELD_V2_IMAGE_GSD_M),
