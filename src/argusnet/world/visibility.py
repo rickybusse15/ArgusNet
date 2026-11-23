@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING
+from functools import cache
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -17,23 +18,31 @@ if TYPE_CHECKING:
     from .weather import WeatherModel
 
 
-_DEFAULT_PROFILE = call("visibility_profile")
+@cache
+def _default_profile() -> dict[str, Any]:
+    """Rust's profile, asked for when a model is made: importing needs no library."""
+    profile: dict[str, Any] = call("visibility_profile")
+    return profile
 
 
 @dataclass(frozen=True)
 class SensorVisibilityModel:
-    hard_blockers: frozenset[str] = frozenset(_DEFAULT_PROFILE["hard_blockers"])
+    hard_blockers: frozenset[str] = field(
+        default_factory=lambda: frozenset(_default_profile()["hard_blockers"])
+    )
     attenuation_by_land_cover: Mapping[int, float] = field(
         default_factory=lambda: {
-            int(k): v for k, v in _DEFAULT_PROFILE["attenuation_by_land_cover"].items()
+            int(k): v for k, v in _default_profile()["attenuation_by_land_cover"].items()
         }
     )
     noise_multiplier_by_land_cover: Mapping[int, float] = field(
         default_factory=lambda: {
-            int(k): v for k, v in _DEFAULT_PROFILE["noise_multiplier_by_land_cover"].items()
+            int(k): v for k, v in _default_profile()["noise_multiplier_by_land_cover"].items()
         }
     )
-    vegetation_hard_block_threshold: float = _DEFAULT_PROFILE["vegetation_hard_block_threshold"]
+    vegetation_hard_block_threshold: float = field(
+        default_factory=lambda: float(_default_profile()["vegetation_hard_block_threshold"])
+    )
 
     @classmethod
     def optical_default(cls) -> SensorVisibilityModel:

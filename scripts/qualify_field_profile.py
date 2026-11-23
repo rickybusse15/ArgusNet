@@ -66,24 +66,27 @@ FIELD_V2_SEEDS = {
     "heldout": [9901, 9902, 9903, 9904, 9905],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
-#: ``field_v3``: the second set, chosen before its campaign ran (2026-11-23).
+#: ``field_v3``: the third set, chosen before its campaign ran (2026-11-23).
 #: The first (111409..121309, held out 10101..10105) failed the step gate on one
 #: seed, 119107: a drone handed to its explorer at the top of its climb was put
-#: where the explorer had run on to. It is a tuning seed now.
+#: where the explorer had run on to. It is a tuning seed now. The second
+#: (133403..143303, held out 10301..10305) qualified, on a build whose routes were
+#: then changed for what review found: a steep leg could step over a wire. A third
+#: of its replays changed, so it describes code that no longer runs.
 FIELD_V3_SEEDS = {
     "qualification": [
-        133403,
-        134507,
-        135601,
-        136709,
-        137803,
-        138907,
-        140009,
-        141101,
-        142211,
-        143303,
+        155401,
+        156503,
+        157607,
+        158701,
+        159811,
+        160903,
+        162007,
+        163109,
+        164201,
+        165311,
     ],
-    "heldout": [10301, 10302, 10303, 10304, 10305],
+    "heldout": [10501, 10502, 10503, 10504, 10505],
     "tuning": [7, 42, 707, 1010, 9002, 4451, 13127, 119107],
 }
 PROFILE_SEEDS = {
@@ -113,23 +116,23 @@ SITE_SEEDS = {
         "heldout": [10001, 10002, 10003, 10004, 10005],
         "tuning": [*FIELD_V2_SEEDS["tuning"], 74027],
     },
-    # Its second set, chosen before any of it was run (2026-11-23). The first
-    # (122401..132301, held out 10201..10205) passed 15 of 15 on the build the
-    # other site failed, which no longer exists.
+    # Its third set, chosen before any of it was run (2026-11-23). The first
+    # (122401..132301, held out 10201..10205) and the second (144409..154303,
+    # held out 10401..10405) passed 15 of 15 on builds that no longer exist.
     ("field_v3", "montague_city"): {
         "qualification": [
-            144409,
-            145501,
-            146603,
-            147709,
-            148801,
-            149903,
-            151007,
-            152111,
-            153203,
-            154303,
+            166403,
+            167507,
+            168601,
+            169709,
+            170801,
+            171907,
+            173003,
+            174107,
+            175211,
+            176303,
         ],
-        "heldout": [10401, 10402, 10403, 10404, 10405],
+        "heldout": [10601, 10602, 10603, 10604, 10605],
         "tuning": FIELD_V3_SEEDS["tuning"],
     },
 }
