@@ -14,6 +14,8 @@
 //! | [`DeficitReason::Sparse`] | More of the same geometry |
 //! | [`DeficitReason::Stale`] | A revisit |
 //! | [`DeficitReason::BiasLimited`] | Nothing a revisit can do |
+//! | [`DeficitReason::ImageCoarse`] | An image from nearer (SR4) |
+//! | [`DeficitReason::ImageLimited`] | Nothing: no flight gets that near |
 //!
 //! **Bias-limited** is the case that matters most for planning. A declared
 //! systematic error (boresight, calibration) is shared by every return, so
@@ -46,6 +48,10 @@ pub struct QualityRequirement {
     /// How old the newest accepted return may be, seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_age_s: Option<f64>,
+    /// The coarsest ground sample distance of a cell's best image, metres
+    /// (SR4). Needs the imaging model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_image_gsd_m: Option<f64>,
     /// The steepest-from-nadir ray whose ground return is accepted, degrees.
     /// Returns from shallower rays are seen but not accepted.
     pub max_incidence_deg: f64,
@@ -66,6 +72,7 @@ impl QualityRequirement {
         positive("min_ground_density_per_m2", self.min_ground_density_per_m2)?;
         positive("max_vertical_sigma_m", self.max_vertical_sigma_m)?;
         positive("max_age_s", self.max_age_s)?;
+        positive("max_image_gsd_m", self.max_image_gsd_m)?;
         if !(self.max_incidence_deg.is_finite()
             && self.max_incidence_deg > 0.0
             && self.max_incidence_deg <= 90.0)
@@ -84,9 +91,12 @@ impl QualityRequirement {
         if self.min_ground_density_per_m2.is_none()
             && self.max_vertical_sigma_m.is_none()
             && self.max_age_s.is_none()
+            && self.max_image_gsd_m.is_none()
         {
             return Err(
-                "a quality requirement must name a density, a vertical sigma or an age".into(),
+                "a quality requirement must name a density, a vertical sigma, an age or an \
+                 image sample distance"
+                    .into(),
             );
         }
         Ok(())
@@ -117,21 +127,31 @@ pub enum DeficitReason {
     Sparse,
     /// Met once, but the newest accepted return is too old.
     Stale,
+    /// Nothing else is missing, but no accepted image is fine enough (SR4).
+    ImageCoarse,
+    /// The image requirement is finer than any flight gets (SR4).
+    ImageLimited,
 }
 
 impl DeficitReason {
-    pub const ALL: [DeficitReason; 6] = [
+    pub const ALL: [DeficitReason; 8] = [
         DeficitReason::Met,
         DeficitReason::Unseen,
         DeficitReason::TooOblique,
         DeficitReason::BiasLimited,
         DeficitReason::Sparse,
         DeficitReason::Stale,
+        DeficitReason::ImageCoarse,
+        DeficitReason::ImageLimited,
     ];
 
-    /// Whether flying more could fix it: everything but met and bias-limited.
+    /// Whether flying more could fix it: everything but met and the two
+    /// limits.
     pub fn is_improvable(self) -> bool {
-        !matches!(self, DeficitReason::Met | DeficitReason::BiasLimited)
+        !matches!(
+            self,
+            DeficitReason::Met | DeficitReason::BiasLimited | DeficitReason::ImageLimited
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -142,6 +162,8 @@ impl DeficitReason {
             DeficitReason::BiasLimited => "bias_limited",
             DeficitReason::Sparse => "sparse",
             DeficitReason::Stale => "stale",
+            DeficitReason::ImageCoarse => "image_coarse",
+            DeficitReason::ImageLimited => "image_limited",
         }
     }
 }
@@ -158,6 +180,9 @@ pub struct CellEvidence {
     pub accepted_height_sq_sum_m2: f64,
     /// Seconds since the newest accepted return; `None` for none.
     pub accepted_age_s: Option<f64>,
+    /// The finest accepted image's ground sample distance here, metres;
+    /// `None` for none (SR4).
+    pub image_gsd_m: Option<f64>,
 }
 
 /// One cell's quality against a requirement.
@@ -197,11 +222,13 @@ pub fn vertical_sigma_m(
 
 /// A cell's quality against `requirement`. The first reason that applies,
 /// in the order the guide's table lists them: unseen, too oblique,
-/// bias-limited, sparse, stale.
+/// bias-limited, image-limited, sparse, stale, image-coarse.
+/// `finest_image_gsd_m` is the finest image any flight gets.
 pub fn assess(
     evidence: &CellEvidence,
     cell_area_m2: f64,
     per_return_sigma_m: f64,
+    finest_image_gsd_m: Option<f64>,
     requirement: &QualityRequirement,
 ) -> CellQuality {
     let density_per_m2 = evidence.accepted_returns as f64 / cell_area_m2.max(f64::MIN_POSITIVE);
@@ -212,6 +239,12 @@ pub fn assess(
         DeficitReason::TooOblique
     } else if requirement.bias_exceeds_sigma() {
         DeficitReason::BiasLimited
+    } else if requirement
+        .max_image_gsd_m
+        .zip(finest_image_gsd_m)
+        .is_some_and(|(max, finest)| finest > max)
+    {
+        DeficitReason::ImageLimited
     } else if requirement
         .min_ground_density_per_m2
         .is_some_and(|min| density_per_m2 < min)
@@ -227,6 +260,11 @@ pub fn assess(
         .is_some_and(|(max, age)| age > max)
     {
         DeficitReason::Stale
+    } else if requirement
+        .max_image_gsd_m
+        .is_some_and(|max| evidence.image_gsd_m.is_none_or(|gsd| gsd > max))
+    {
+        DeficitReason::ImageCoarse
     } else {
         DeficitReason::Met
     };
@@ -246,6 +284,10 @@ pub struct DeficitCounts {
     pub bias_limited: u64,
     pub sparse: u64,
     pub stale: u64,
+    #[serde(default)]
+    pub image_coarse: u64,
+    #[serde(default)]
+    pub image_limited: u64,
 }
 
 impl DeficitCounts {
@@ -257,11 +299,20 @@ impl DeficitCounts {
             DeficitReason::BiasLimited => &mut self.bias_limited,
             DeficitReason::Sparse => &mut self.sparse,
             DeficitReason::Stale => &mut self.stale,
+            DeficitReason::ImageCoarse => &mut self.image_coarse,
+            DeficitReason::ImageLimited => &mut self.image_limited,
         } += 1;
     }
 
     pub fn total(&self) -> u64 {
-        self.met + self.unseen + self.too_oblique + self.bias_limited + self.sparse + self.stale
+        self.met
+            + self.unseen
+            + self.too_oblique
+            + self.bias_limited
+            + self.sparse
+            + self.stale
+            + self.image_coarse
+            + self.image_limited
     }
 
     /// The share of cells that meet the requirement.
@@ -271,7 +322,7 @@ impl DeficitCounts {
 
     /// Cells no amount of flying can bring to the requirement.
     pub fn unreachable(&self) -> u64 {
-        self.bias_limited
+        self.bias_limited + self.image_limited
     }
 }
 
@@ -284,6 +335,7 @@ mod tests {
             min_ground_density_per_m2: Some(0.05),
             max_vertical_sigma_m: Some(0.5),
             max_age_s: Some(60.0),
+            max_image_gsd_m: None,
             max_incidence_deg: 45.0,
             bias_floor_m: 0.1,
         }
@@ -297,6 +349,7 @@ mod tests {
             accepted_height_sum_m: n as f64 * height,
             accepted_height_sq_sum_m2: n as f64 * height * height,
             accepted_age_s: (n > 0).then_some(age_s),
+            image_gsd_m: None,
         }
     }
 
@@ -304,7 +357,7 @@ mod tests {
     fn each_reason_is_the_first_that_applies() {
         let r = requirement();
         let area = 100.0;
-        let reason = |e: &CellEvidence| assess(e, area, 0.3, &r).reason;
+        let reason = |e: &CellEvidence| assess(e, area, 0.3, None, &r).reason;
         assert_eq!(reason(&CellEvidence::default()), DeficitReason::Unseen);
         let oblique = CellEvidence {
             ground_returns: 12,
@@ -319,7 +372,7 @@ mod tests {
             ..r.clone()
         };
         assert_eq!(
-            assess(&evidence(1000, 10.0, 0.0), area, 0.3, &biased).reason,
+            assess(&evidence(1000, 10.0, 0.0), area, 0.3, None, &biased).reason,
             DeficitReason::BiasLimited,
             "no count beats a bias above the requirement"
         );
@@ -329,9 +382,38 @@ mod tests {
             bias_floor_m: 0.5,
             ..r.clone()
         };
-        let quality = assess(&evidence(8, 10.0, 0.0), area, 0.0, &equal);
+        let quality = assess(&evidence(8, 10.0, 0.0), area, 0.0, None, &equal);
         assert_eq!(quality.vertical_sigma_m, Some(0.5));
         assert_eq!(quality.reason, DeficitReason::Met);
+    }
+
+    /// An image requirement is checked last, so a cell says what else it
+    /// lacks first; one no flight can meet is a limit, not a deficit.
+    #[test]
+    fn a_coarse_image_is_the_last_reason_and_an_unreachable_one_a_limit() {
+        let r = QualityRequirement {
+            max_image_gsd_m: Some(0.03),
+            ..requirement()
+        };
+        let reason = |gsd, floor| {
+            let e = CellEvidence {
+                image_gsd_m: gsd,
+                ..evidence(8, 10.0, 0.0)
+            };
+            assess(&e, 100.0, 0.3, Some(floor), &r).reason
+        };
+        assert_eq!(reason(None, 0.01), DeficitReason::ImageCoarse);
+        assert_eq!(reason(Some(0.031), 0.01), DeficitReason::ImageCoarse);
+        assert_eq!(reason(Some(0.03), 0.01), DeficitReason::Met);
+        assert_eq!(reason(Some(0.03), 0.04), DeficitReason::ImageLimited);
+        let sparse = CellEvidence {
+            image_gsd_m: None,
+            ..evidence(2, 10.0, 0.0)
+        };
+        assert_eq!(
+            assess(&sparse, 100.0, 0.3, Some(0.01), &r).reason,
+            DeficitReason::Sparse
+        );
     }
 
     #[test]
@@ -348,6 +430,7 @@ mod tests {
             accepted_height_sum_m: 0.0 + 4.0,
             accepted_height_sq_sum_m2: 0.0 + 16.0,
             accepted_age_s: Some(0.0),
+            image_gsd_m: None,
         };
         // Sample variance 8, over 2, plus bias²: sqrt(4.01).
         let s = vertical_sigma_m(&spread, 0.3, 0.1).unwrap();
@@ -361,9 +444,9 @@ mod tests {
             counts.add(reason);
         }
         counts.add(DeficitReason::Met);
-        assert_eq!(counts.total(), 7);
-        assert!((counts.met_fraction() - 2.0 / 7.0).abs() < 1e-12);
-        assert_eq!(counts.unreachable(), 1);
+        assert_eq!(counts.total(), 9);
+        assert!((counts.met_fraction() - 2.0 / 9.0).abs() < 1e-12);
+        assert_eq!(counts.unreachable(), 2);
         assert!(!DeficitReason::BiasLimited.is_improvable());
         assert!(DeficitReason::Stale.is_improvable());
         assert_eq!(DeficitCounts::default().met_fraction(), 0.0);

@@ -140,6 +140,20 @@
     }
   },
   "definitions": {
+    "imageCapture": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "refusal": {
+          "type": "string",
+          "enum": ["stowed", "unsettled", "no_ground", "too_oblique", "blurred"]
+        },
+        "range_m": { "type": "number", "minimum": 0 },
+        "gsd_m": { "type": "number", "minimum": 0 },
+        "blur_px": { "type": "number", "minimum": 0 },
+        "incidence_deg": { "type": "number", "minimum": 0 }
+      }
+    },
     "vector3": {
       "type": "array",
       "description": "A 3D vector represented as [x, y, z] in meters.",
@@ -650,6 +664,11 @@
                 "stale_cells": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "image_coarse_cells": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "SR4: cells lacking only an image fine enough for the requirement. Absent when none."
                 },
                 "unreachable_cells": {
                   "type": "integer",
@@ -1265,6 +1284,18 @@
                   "occluded": {
                     "type": "integer",
                     "minimum": 0
+                  },
+                  "images": {
+                    "type": "object",
+                    "description": "SR4: what the pod's visible and thermal images were worth, each with a `refusal` when it does not count. No pixels. Absent without the imaging model.",
+                    "required": ["visible"],
+                    "additionalProperties": true,
+                    "properties": {
+                      "visible": { "$ref": "#/definitions/imageCapture" },
+                      "thermal": { "$ref": "#/definitions/imageCapture" },
+                      "stereo_depth_sigma_m": { "type": "number", "minimum": 0 },
+                      "thermal_min_contrast_k": { "type": "number", "minimum": 0 }
+                    }
                   }
                 }
               }

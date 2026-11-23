@@ -203,8 +203,8 @@ struct SimArgs {
     /// map, the provisional rig with LiDAR returns, measured and tracked
     /// power lines with poles and wire-aware flight, mission flights over
     /// the believed surface, `flown_v1` energy, `contingency_v1` planning,
-    /// and a declared map requirement); `field_v2` adds view planning and
-    /// is not yet qualified. The flags it sets are refused with
+    /// and a declared map requirement); `field_v2` adds view planning
+    /// and imaging, and is not yet qualified. The flags it sets are refused with
     /// it; faults, delivery and rates still apply. Recorded in the replay's
     /// `meta.run_profile`.
     #[arg(long, value_parser = argusnet_sim::run_options::RunProfile::parse)]
@@ -316,6 +316,16 @@ struct SimArgs {
     /// default. Implies `--view-planning`.
     #[arg(long)]
     view_planning_profile: Option<PathBuf>,
+    /// With `--rig-profile`, model the pod's cameras (SR4): each capture says
+    /// its images' ground sample distance, blur, obliquity and why one does
+    /// not count. No pixels. `--quality-requirements` may then ask for
+    /// `max_image_gsd_m`. Every number is assumed.
+    #[arg(long)]
+    imaging: bool,
+    /// The imaging model's parameters as JSON (`ImagingConfig`), instead of
+    /// the assumed default. Implies `--imaging`.
+    #[arg(long)]
+    imaging_profile: Option<PathBuf>,
     /// With `--rig-profile`, model the pod LiDAR's returns (SR3): each ray
     /// fires at its own time across the capture, returns only with the
     /// chance its reflectivity, incidence and range give, and carries range
@@ -555,6 +565,19 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             .view_planning
             .then(argusnet_planning::views::ViewPlanningConfig::default),
     };
+    let imaging = match &args.imaging_profile {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            Some(
+                serde_json::from_str::<argusnet_sim::imaging::ImagingConfig>(&text)
+                    .map_err(|error| format!("{}: {error}", path.display()))?,
+            )
+        }
+        None => args
+            .imaging
+            .then(argusnet_sim::imaging::ImagingConfig::default),
+    };
     let measured_wires = match &args.wire_sensor_profile {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -607,6 +630,8 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             (rig.is_some(), "--rig-profile"),
             (args.lidar_returns, "--lidar-returns"),
             (pointing.is_some(), "--pointing"),
+            (view_planning.is_some(), "--view-planning"),
+            (imaging.is_some(), "--imaging"),
             (args.belief_flights, "--belief-flights"),
             (
                 args.scan_coverage_threshold.is_some(),
@@ -719,6 +744,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                     .wire_planning
                     .then(argusnet_sim::belief_world::WirePlanningConfig::default),
                 view_planning: view_planning.clone(),
+                imaging: imaging.clone(),
                 pursuit: match args.pursuit {
                     Some(PursuitArg::Tracks) => argusnet_sim::belief_world::PursuitSource::Tracks,
                     Some(PursuitArg::Truth) => argusnet_sim::belief_world::PursuitSource::Truth,
@@ -976,6 +1002,12 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--view-planning points a rig's pod by a quality requirement: it needs \
              --rig-profile and --quality-requirements, and replaces --pointing",
+        );
+    }
+    if (args.imaging || args.imaging_profile.is_some()) && args.rig_profile.is_none() {
+        return fail(
+            EXIT_INVALID,
+            "--imaging models the rig's cameras: it needs --rig-profile",
         );
     }
     if args.lidar_returns && args.rig_profile.is_none() {

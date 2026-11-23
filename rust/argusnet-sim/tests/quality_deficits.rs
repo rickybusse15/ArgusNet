@@ -25,6 +25,7 @@ fn requirement() -> QualityRequirement {
         min_ground_density_per_m2: Some(0.03),
         max_vertical_sigma_m: Some(0.5),
         max_age_s: None,
+        max_image_gsd_m: None,
         max_incidence_deg: 40.0,
         bias_floor_m: 0.05,
     }

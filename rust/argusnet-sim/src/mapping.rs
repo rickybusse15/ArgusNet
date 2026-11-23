@@ -523,6 +523,19 @@ impl MappingStage {
     ) -> crate::belief_world::BeliefHandle {
         if let Some(requirement) = &config.quality {
             grid.track_quality(requirement.max_incidence_deg);
+            let camera = config
+                .rig
+                .as_ref()
+                .and_then(|rig| rig.mount(crate::rig::SensorRole::VisibleCamera))
+                .and_then(|mount| mount.camera.as_ref());
+            if let (Some(_), Some(imaging), Some(optics)) =
+                (requirement.max_image_gsd_m, &config.imaging, camera)
+            {
+                grid.track_images(
+                    crate::imaging::ImageFootprint::new(optics, imaging),
+                    imaging.finest_gsd_m(optics),
+                );
+            }
         }
         if let Some(tracker) = &config.wire_tracker {
             grid.track_wires(tracker.clone());

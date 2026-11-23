@@ -232,6 +232,20 @@ impl PointingPolicy {
         }
     }
 
+    /// How fast the commanded attitude turns at `t_s`, rad/s.
+    fn command_rate_rad_s(&self, t_s: f64) -> f64 {
+        match self {
+            Self::CrossTrackSweep {
+                amplitude_deg,
+                period_s,
+            } => {
+                let omega = std::f64::consts::TAU / period_s;
+                (amplitude_deg.to_radians() * omega * (omega * t_s).cos()).abs()
+            }
+            Self::Nadir | Self::Planned | Self::BodyFixed { .. } => 0.0,
+        }
+    }
+
     /// The commanded attitude in the body frame at `t_s`, the aircraft
     /// heading `heading_rad`. World-stabilised modes come back to the body
     /// through the heading: the sim has no body roll or pitch.
@@ -330,7 +344,24 @@ pub struct PodCapture {
     pub boresight_world: [f64; 3],
     /// Rays the airframe blocked.
     pub occluded: u32,
+    /// What the pod's cameras got (SR4). Absent without the imaging model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<crate::imaging::PodImages>,
 }
+
+/// The pod's cameras, as the imaging model needs them (SR4).
+#[derive(Debug, Clone)]
+struct PodCameras {
+    config: crate::imaging::ImagingConfig,
+    visible: SensorMount,
+    visible_optics: crate::rig::CameraOptics,
+    /// The visible pair's baseline, metres; `None` with one camera.
+    baseline_m: Option<f64>,
+    thermal: Option<(SensorMount, crate::rig::CameraOptics)>,
+}
+
+/// How far a camera's boresight is followed, metres.
+const IMAGE_RANGE_M: f64 = 2000.0;
 
 /// The pod: its gimbals, its LiDAR, its pointing.
 #[derive(Debug, Clone)]
@@ -357,6 +388,8 @@ pub struct PodSensing {
     /// The steepest ray from nadir a quality requirement accepts, radians:
     /// no ray past it is required, so the height cap need not reach with it.
     required_incidence_rad: Option<f64>,
+    /// The cameras' imaging model (SR4).
+    cameras: Option<PodCameras>,
 }
 
 /// The furthest from nadir a jammed pod's boresight may point and its
@@ -408,6 +441,7 @@ impl PodSensing {
             scan_interval_s: 1.0,
             planning: None,
             required_incidence_rad: None,
+            cameras: None,
         })
     }
 
@@ -431,6 +465,159 @@ impl PodSensing {
     pub fn with_measured_wires(mut self, measured: crate::wire_sensing::MeasuredWires) -> Self {
         self.measured = Some(measured);
         self
+    }
+
+    /// Model what the pod's cameras get (SR4). Needs a visible camera with
+    /// declared optics.
+    pub fn with_imaging(mut self, config: crate::imaging::ImagingConfig) -> Result<Self, String> {
+        config.validate()?;
+        let of = |role| {
+            self.rig
+                .sensors
+                .iter()
+                .filter(move |mount| mount.role == role)
+                .filter_map(|mount| mount.camera.clone().map(|optics| (mount.clone(), optics)))
+        };
+        let mut pair = of(SensorRole::VisibleCamera);
+        let (visible, visible_optics) = pair
+            .next()
+            .ok_or("imaging needs a visible camera with declared optics on the rig")?;
+        let baseline_m = pair.next().map(|(second, _)| {
+            (0..3)
+                .map(|k| (second.lever_arm_m[k] - visible.lever_arm_m[k]).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        });
+        drop(pair);
+        let thermal = of(SensorRole::ThermalCamera).next();
+        self.cameras = Some(PodCameras {
+            config,
+            visible,
+            visible_optics,
+            baseline_m,
+            thermal,
+        });
+        Ok(self)
+    }
+
+    /// The optics of the camera image requirements are met with, when the
+    /// imaging model is on.
+    pub fn visible_optics(&self) -> Option<&crate::rig::CameraOptics> {
+        self.cameras.as_ref().map(|cameras| &cameras.visible_optics)
+    }
+
+    /// What the cameras get: from the pod's true attitude, with the pose the
+    /// estimator would place the visible image by.
+    #[allow(clippy::too_many_arguments)]
+    fn image(
+        &self,
+        cameras: &PodCameras,
+        source: PointingSource,
+        settled: bool,
+        velocity: [f64; 3],
+        t_s: f64,
+        base: [f64; 3],
+        world_pod_true: Quat,
+        world_pod_est: Quat,
+        draw: &mut dyn FnMut() -> f64,
+    ) -> crate::imaging::PodImages {
+        use crate::imaging::{
+            assess, stereo_depth_sigma_m, thermal_min_contrast_k, ImageCapture, ImagePose,
+            ImageRefusal, PodImages, View,
+        };
+        let config = &cameras.config;
+        let refusal = if source == PointingSource::Stow {
+            Some(ImageRefusal::Stowed)
+        } else if !settled {
+            Some(ImageRefusal::Unsettled)
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            return PodImages {
+                visible: ImageCapture::refused(refusal),
+                stereo_depth_sigma_m: None,
+                thermal: cameras
+                    .thermal
+                    .as_ref()
+                    .map(|_| ImageCapture::refused(refusal)),
+                thermal_min_contrast_k: None,
+                visible_pose: None,
+            };
+        }
+        // A settled pod still turns as fast as its command does: judging it
+        // at its residual jitter passed every image of a sweep.
+        let turn_rate_rad_s = if source == PointingSource::Jammed {
+            0.0
+        } else {
+            self.policy
+                .command_rate_rad_s(t_s)
+                .min(self.rig.gimbal.max_rate_rad_s)
+        };
+        let mut view_of = |mount: &SensorMount| -> Option<View> {
+            let world_camera = world_pod_true.then(Quat::from_ypr_deg(mount.rotation_ypr_deg));
+            let origin = add(base, world_pod_true.rotate(mount.lever_arm_m));
+            let boresight = world_camera.rotate([1.0, 0.0, 0.0]);
+            let end = add(origin, scale(boresight, IMAGE_RANGE_M));
+            let (_, point) = self.world.first_return(origin, end, draw)?;
+            let range_m = (0..3)
+                .map(|k| (point[k] - origin[k]).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            let along: f64 = (0..3).map(|k| velocity[k] * boresight[k]).sum();
+            let speed_sq: f64 = velocity.iter().map(|v| v * v).sum();
+            Some(View {
+                range_m,
+                incidence_rad: (-boresight[2]).clamp(-1.0, 1.0).acos(),
+                cross_speed_mps: (speed_sq - along * along).max(0.0).sqrt(),
+                turn_rate_rad_s,
+            })
+        };
+        let visible_view = view_of(&cameras.visible);
+        let visible = visible_view.map_or(ImageCapture::refused(ImageRefusal::NoGround), |view| {
+            assess(
+                &cameras.visible_optics,
+                view,
+                config.visible_exposure_s,
+                config.visible_max_blur_px,
+                config.max_incidence_deg,
+            )
+        });
+        let thermal = cameras.thermal.as_ref().map(|(mount, optics)| {
+            view_of(mount).map_or(ImageCapture::refused(ImageRefusal::NoGround), |view| {
+                assess(
+                    optics,
+                    view,
+                    config.thermal_time_constant_s,
+                    config.thermal_max_blur_px,
+                    config.max_incidence_deg,
+                )
+            })
+        });
+        PodImages {
+            stereo_depth_sigma_m: cameras
+                .baseline_m
+                .zip(visible_view)
+                .map(|(baseline, view)| {
+                    stereo_depth_sigma_m(
+                        &cameras.visible_optics,
+                        baseline,
+                        view.range_m,
+                        config.stereo_disparity_sigma_px,
+                    )
+                }),
+            thermal_min_contrast_k: thermal
+                .as_ref()
+                .and_then(|image| image.blur_px)
+                .map(|blur| thermal_min_contrast_k(config.thermal_netd_k, blur)),
+            visible_pose: visible.accepted().then(|| ImagePose {
+                origin_m: add(base, world_pod_est.rotate(cameras.visible.lever_arm_m)),
+                world_camera: world_pod_est
+                    .then(Quat::from_ypr_deg(cameras.visible.rotation_ypr_deg)),
+            }),
+            visible,
+            thermal,
+        }
     }
 
     /// Only rays within `max_incidence_rad` of nadir are required (a quality
@@ -1001,6 +1188,27 @@ impl PodSensing {
                 (Vec::new(), points)
             }
         };
+        let settled = if source == PointingSource::Jammed {
+            let down = -world_sensor_est.rotate([1.0, 0.0, 0.0])[2];
+            down >= JAMMED_MAX_OFF_NADIR_DEG.to_radians().cos()
+        } else {
+            settled
+        };
+        let images = self.cameras.as_ref().map(|cameras| {
+            // A stream of its own: the LiDAR's draws are the same with it on.
+            let mut leaves = key("pod-image-canopy");
+            self.image(
+                cameras,
+                source,
+                settled,
+                velocity,
+                t_s,
+                base,
+                world_pod_true,
+                world_pod_est,
+                &mut || leaves.uniform(),
+            )
+        });
         RangeScan {
             node_id: node_id.to_string(),
             timestamp_s: t_s,
@@ -1011,15 +1219,11 @@ impl PodSensing {
             sensor: ScanSensor::RangeScanner,
             pod: Some(PodCapture {
                 source,
-                settled: if source == PointingSource::Jammed {
-                    let down = -world_sensor_est.rotate([1.0, 0.0, 0.0])[2];
-                    down >= JAMMED_MAX_OFF_NADIR_DEG.to_radians().cos()
-                } else {
-                    settled
-                },
+                settled,
                 command_error_rad: gimbal.actual.angle_to(command),
                 boresight_world: world_sensor_est.rotate([1.0, 0.0, 0.0]),
                 occluded,
+                images,
             }),
             wire_points,
             wire_lines: Vec::new(),

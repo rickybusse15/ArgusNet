@@ -2079,6 +2079,11 @@ impl AssembledRun {
             .stage_mut::<MappingStage>(Stage::UpdateMappingAndLocalization)
             .expect("installed above")
             .set_belief_dt(dt_s);
+        if let Some(imaging) = &config.imaging {
+            pod = pod
+                .map(|pod| pod.with_imaging(imaging.clone()))
+                .transpose()?;
+        }
         if let (Some(pod), Some(quality)) = (pod.as_mut(), &config.quality) {
             pod.set_required_incidence(quality.max_incidence_deg.to_radians());
         }
@@ -2151,6 +2156,20 @@ impl AssembledRun {
             .and_then(|pod| pod.max_mapping_agl_m(config.unknown_margin_m));
         if let Some(cap) = agl_cap_m {
             controllers.cap_agl(cap);
+        }
+        // An image requirement lowers the whole flight, and slows it to what
+        // keeps its images sharp (SR4). Low passes after a high survey were
+        // tried and lost: docs/migration/IMAGING.md.
+        if let (Some(imaging), Some(quality), Some(pod)) = (&config.imaging, &config.quality, &pod)
+        {
+            if let Some((gsd_m, optics)) = quality.max_image_gsd_m.zip(pod.visible_optics()) {
+                // One no flight can meet is reported, not flown for.
+                if imaging.finest_gsd_m(optics) <= gsd_m {
+                    let agl_m = imaging.agl_for_gsd_m(optics, gsd_m);
+                    controllers.cap_agl(agl_m);
+                    controllers.cap_speeds(imaging.max_sharp_speed_mps(optics, agl_m));
+                }
+            }
         }
         controllers.set_physical_guard(guard.clone());
         controllers.set_explorers_rejoin(rejoin_explorers);

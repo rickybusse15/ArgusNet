@@ -18,6 +18,7 @@ pub mod follow_path;
 pub mod frontier;
 pub mod fusion;
 pub mod ground;
+pub mod imaging;
 pub mod journal;
 pub mod lidar_returns;
 pub mod mapping;

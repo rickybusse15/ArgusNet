@@ -374,6 +374,9 @@ pub struct ReplayQualityStats {
     pub too_oblique_cells: u64,
     pub sparse_cells: u64,
     pub stale_cells: u64,
+    /// Cells lacking only a fine enough image (SR4). Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub image_coarse_cells: u64,
     pub unreachable_cells: u64,
     /// Met over all cells.
     pub met_fraction: f64,
@@ -391,6 +394,7 @@ impl From<&crate::belief_world::QualityLayer> for ReplayQualityStats {
             too_oblique_cells: counts.too_oblique,
             sparse_cells: counts.sparse,
             stale_cells: counts.stale,
+            image_coarse_cells: counts.image_coarse,
             unreachable_cells: counts.unreachable(),
             met_fraction: counts.met_fraction(),
             resolved_fraction: layer.resolved_fraction(),
@@ -481,6 +485,9 @@ impl From<&crate::range_scan::RangeScan> for ReplayRangeScan {
             pod: scan.pod.clone().map(|mut pod| {
                 pod.boresight_world = pod.boresight_world.map(|v| (v * 1e4).round() / 1e4);
                 pod.command_error_rad = (pod.command_error_rad * 1e5).round() / 1e5;
+                if let Some(images) = pod.images.as_mut() {
+                    images.round_for_replay();
+                }
                 pod
             }),
         }

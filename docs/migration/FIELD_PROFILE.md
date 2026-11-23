@@ -324,6 +324,25 @@ ends when the gate is met, so the share of cells meeting the requirement is
 about the same by design; seed 1010 ends nearer the gate (0.907 against
 0.90). Closest approach to a conductor stays above 17 m on all eight.
 
+**Imaging (SR4, [IMAGING.md](IMAGING.md)).** The pod's cameras are modelled,
+and every cell is asked for an image of 4 cm a pixel or finer. The whole flight
+comes down to meet it, from 148 m over the ground to about 124 m. The table
+above is view planning alone; with both, on the same seeds, every gate passes:
+
+| Seed | Mission complete, s (v1 → v2) | Cells meeting it, images included | Structure recall (v1 → v2) |
+| --- | --- | --- | --- |
+| 7 | 358 → 396 | 0.905 | 0.979 → 0.998 |
+| 42 | 376 → 406 | 0.902 | 0.946 → 0.979 |
+| 707 | 530 → 455 | 0.917 | – → 0.997 |
+| 1010 | 371 → 416 | 0.904 | – → 0.992 |
+| 4451 | 421 → 421 | 0.907 | 0.983 → 0.977 |
+| 9002 | 352 → 423 | 0.908 | – → 0.992 |
+| 9005 | 355 → 435 | 0.915 | – → 0.994 |
+| 13127 | 397 → 428 | 0.911 | – → 0.991 |
+
+The images cost what view planning saved, and somewhat more: the median mission
+is 422 s against v1's 374 s.
+
 `field_v1` itself is unchanged: its West Pleasant View replay is
 byte-identical to the build before, and the canonical replays are 14 of 14.
 
