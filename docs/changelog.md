@@ -5,6 +5,10 @@
 - `--profile field_v3`: `field_v2` on estimated positions, with cells placed to
   0.5 m, a lost drone's hold and return, and separation over the believed
   surface. Limits are frozen; it is not qualified yet.
+  - Follow up (`follow_up`): the points inspected, the fleet goes back over what
+    falls short of the map's requirement. Cells meeting it went from about 0.91
+    to 0.94 (West Pleasant View) and 0.97 (Montague City), for up to 120 s.
+  - A scan whose every drone has gone home for good ends (`end_when_all_home`).
   - A drone let go from a hold is flown back to its controller's path. It was put
     there, up to three steps in one tick, after a camera outage too.
 - A second real site: Montague City, Massachusetts (`tests/fixtures/real`), a

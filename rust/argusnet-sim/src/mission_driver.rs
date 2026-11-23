@@ -263,6 +263,18 @@ struct DriverCheckpoint {
     /// when none.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     unassigned: BTreeSet<String>,
+    /// Flying on for the map (`follow_up`). Absent until it starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    follow_up: Option<FollowUp>,
+}
+
+/// How a follow up is going: when it started, how many cells met the
+/// requirement when over its window, and whether it has ended.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct FollowUp {
+    started_at_s: f64,
+    met: Vec<(f64, u64)>,
+    ended: bool,
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -422,6 +434,10 @@ pub struct MissionDriverStage {
     sensors_out: SensorsOut,
     /// How well each drone knows where it is, for what a lost one does.
     flown: Option<crate::navigation::FlownPositions>,
+    follow_up_config: Option<crate::belief_world::FollowUpConfig>,
+    follow_up: Option<FollowUp>,
+    /// Whether a scan with every drone homeward is over.
+    ends_when_all_home: bool,
     /// Drones sweeping a hole in the coverage map under efficient_v1 (P4),
     /// with the cells they sweep.
     gap_fill: BTreeMap<String, GapFill>,
@@ -1215,6 +1231,9 @@ impl MissionDriverStage {
             fault_return: None,
             sensors_out: SensorsOut::default(),
             flown: None,
+            follow_up_config: None,
+            follow_up: None,
+            ends_when_all_home: false,
             gap_fill: BTreeMap::new(),
             rescored: false,
             coordinator: None,
@@ -2475,6 +2494,97 @@ impl MissionDriverStage {
     /// first tick.
     pub fn set_fault_return(&mut self, config: Option<crate::belief_world::FaultReturnConfig>) {
         self.fault_return = config;
+    }
+
+    /// Go on for the map once the points are inspected. Before the first tick.
+    pub fn set_follow_up(&mut self, config: Option<crate::belief_world::FollowUpConfig>) {
+        self.follow_up_config = config;
+    }
+
+    /// End a scan whose every drone is homeward for good. Before the first
+    /// tick.
+    pub fn end_when_all_home(&mut self, ends: bool) {
+        self.ends_when_all_home = ends;
+    }
+
+    /// Whether the fleet stays out for the map, its points inspected: what
+    /// falls short of the requirement is gone back over, as the scan did,
+    /// until there is little left, little comes of it or time is up.
+    fn follows_up(
+        &mut self,
+        timestamp_s: f64,
+        mobile: &[(String, [f64; 3])],
+        counts: Option<&argusnet_mapping::quality::DeficitCounts>,
+    ) -> bool {
+        let (Some(config), Some(counts)) = (self.follow_up_config.clone(), counts) else {
+            return false;
+        };
+        if self.follow_up.as_ref().is_some_and(|state| state.ended) {
+            return false;
+        }
+        let working: Vec<String> = mobile
+            .iter()
+            .map(|(id, _)| id.clone())
+            .filter(|id| !self.homeward.contains(id))
+            .collect();
+        let total = counts.total().max(1);
+        let short = total - (counts.met + counts.unreachable()).min(total);
+        let starts = self.follow_up.is_none();
+        let state = self.follow_up.get_or_insert_with(|| FollowUp {
+            started_at_s: timestamp_s,
+            met: Vec::new(),
+            ended: false,
+        });
+        state.met.push((timestamp_s, counts.met));
+        // The newest mark at least a window old, and what came after.
+        let since = timestamp_s - config.window_s + 1e-9;
+        let old = state.met.iter().rposition(|(at, _)| *at <= since);
+        if let Some(old) = old {
+            state.met.drain(..old);
+        }
+        let gained_per_drone_min = old.map(|_| {
+            let (at, met) = state.met[0];
+            let minutes = (timestamp_s - at).max(1e-9) / 60.0;
+            (counts.met as f64 - met as f64) / minutes / working.len().max(1) as f64
+        });
+        let over = if working.is_empty() {
+            Some("fleet_homeward")
+        } else if short as f64 <= config.enough_fraction * total as f64 {
+            Some("little_left")
+        } else if timestamp_s - state.started_at_s >= config.max_s - 1e-9 {
+            Some("time_up")
+        } else if gained_per_drone_min.is_some_and(|rate| rate < config.min_cells_per_drone_min) {
+            Some("little_gained")
+        } else {
+            None
+        };
+        state.ended = over.is_some();
+        if starts || over.is_some() {
+            let inputs = serde_json::json!({
+                "started_at_s": state.started_at_s,
+                "short_cells": short,
+                "met_cells": counts.met,
+                "gained_per_drone_min": gained_per_drone_min,
+            });
+            self.decisions.push(Decision {
+                kind: "follow_up",
+                status: DecisionStatus::Applied,
+                subject: None,
+                selected: None,
+                candidates: working,
+                reason: over.unwrap_or("map_falls_short"),
+                detail: match over {
+                    None => format!(
+                        "every point is inspected and {short} cells flying could fix fall short: \
+                         the fleet goes back over them"
+                    ),
+                    Some(_) => format!("the fleet goes home: {short} such cells are left"),
+                },
+                inputs,
+                command: None,
+            });
+        }
+        over.is_none()
     }
 
     /// How well each drone knows where it is. Before the first tick.
@@ -3825,7 +3935,32 @@ impl StageHandler for MissionDriverStage {
                 serde_json::json!(layer.counts.unreachable());
             gate_inputs["quality_met_cells"] = serde_json::json!(layer.counts.met);
         }
+        // The map's own account of what falls short is followed up before the
+        // fleet goes home.
+        let following_up = phase == MissionPhase::Inspecting
+            && all_pois_complete
+            && self.follows_up(
+                timestamp_s,
+                &mobile,
+                belief
+                    .as_ref()
+                    .and_then(|belief| belief.quality())
+                    .map(|layer| &layer.counts),
+            );
+        if self.follow_up_config.is_some() {
+            gate_inputs["following_up"] = serde_json::json!(following_up);
+        }
+        let all_pois_complete = all_pois_complete && !following_up;
+        // With every drone homeward for good nothing more will be scanned.
+        let scan_over = self.ends_when_all_home
+            && matches!(phase, MissionPhase::Scanning | MissionPhase::Localizing)
+            && !mobile.is_empty()
+            && mobile.iter().all(|(id, _)| self.homeward.contains(id));
+        if scan_over {
+            gate_inputs["scan_over"] = serde_json::json!("fleet_homeward");
+        }
         self.machine.set_inputs(MissionInputs {
+            scan_over,
             timestamp_s,
             coverage_fraction,
             gap_cell_fraction,
@@ -3985,6 +4120,7 @@ impl StageHandler for MissionDriverStage {
             mapped_wires: self.mapped_wires,
             mapped_fit: self.mapped_fit,
             unassigned: self.unassigned.clone(),
+            follow_up: self.follow_up.clone(),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
     }
@@ -4030,6 +4166,7 @@ impl StageHandler for MissionDriverStage {
         self.mapped_wires = decoded.mapped_wires;
         self.mapped_fit = decoded.mapped_fit;
         self.unassigned = decoded.unassigned;
+        self.follow_up = decoded.follow_up;
         self.override_commands.clear();
         self.decisions.clear();
         self.publish_report();
@@ -4083,6 +4220,7 @@ impl StageHandler for MissionDriverStage {
         self.mapped_installed = Vec::new();
         self.mapped_wires = 0;
         self.mapped_fit = 0;
+        self.follow_up = None;
         self.unassigned.clear();
         self.override_commands.clear();
         self.decisions.clear();

@@ -33,6 +33,7 @@ fn scan_done(t: f64, n: usize, confidence: f64) -> MissionInputs {
         localization_confidences: vec![confidence; n],
         localizer_timed_out: false,
         all_pois_complete: false,
+        scan_over: false,
         home_distances_m: vec![Some(900.0); n],
     }
 }

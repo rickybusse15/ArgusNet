@@ -7,7 +7,7 @@
 //! it knows again without being put anywhere, and goes home for good when that
 //! lasts.
 
-use argusnet_sim::belief_world::LostPositionConfig;
+use argusnet_sim::belief_world::{FollowUpConfig, LostPositionConfig};
 use argusnet_sim::faults::{Fault, FaultManifest, MANIFEST_FORMAT, MANIFEST_VERSION};
 use argusnet_sim::mission_driver::{MissionDriverStage, SensorLost};
 use argusnet_sim::navigation::NavigationConfig;
@@ -132,6 +132,8 @@ fn the_profile_is_field_v2_and_what_it_adds() {
     exploration.quality.as_mut().unwrap().max_horizontal_sigma_m = None;
     exploration.fault_return.as_mut().unwrap().lost_position = None;
     exploration.separation_surface = false;
+    exploration.follow_up = None;
+    exploration.end_when_all_home = false;
     assert_eq!(stripped, v2);
 
     let (meta, _) = replay(&v3);
@@ -263,4 +265,125 @@ fn what_needs_navigation_is_refused_without_it() {
     let mut run = assemble(&bundle).unwrap();
     let error = options.apply(&mut run, &bundle).unwrap_err();
     assert!(error.contains("lost position"), "{error}");
+}
+
+/// Whether stage 9 recorded a decision of `kind` for `reason`, by tick.
+fn decided(options: &RunOptions, kind: &str) -> Vec<(u64, String)> {
+    let mut run = run_with(options);
+    let mut found = Vec::new();
+    for tick in 0..bundle().steps as u64 {
+        run.step().unwrap();
+        let driver = run
+            .sim
+            .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+            .expect("a mission driver");
+        for decision in driver.decisions() {
+            if decision.kind == kind {
+                found.push((tick, decision.reason.to_string()));
+            }
+        }
+    }
+    found
+}
+
+fn met(frame: &Value) -> u64 {
+    frame["mapping_state"]["belief"]["quality"]["met_cells"]
+        .as_u64()
+        .expect("a met count")
+}
+
+/// Once the points are inspected the fleet goes back over what falls short,
+/// then home; a run checkpointed in it finishes as the uninterrupted one.
+#[test]
+fn the_fleet_follows_up_on_the_map_before_it_goes_home() {
+    let with = |follow_up: Option<FollowUpConfig>| {
+        let mut options = whole_mission(None, None);
+        options.exploration.as_mut().unwrap().follow_up = follow_up;
+        options
+    };
+    let follow_up = FollowUpConfig {
+        max_s: 40.0,
+        window_s: 10.0,
+        min_cells_per_drone_min: 0.0,
+        enough_fraction: 0.0,
+    };
+    let options = with(Some(follow_up.clone()));
+    let decisions = decided(&options, "follow_up");
+    assert_eq!(
+        decisions
+            .iter()
+            .map(|(_, r)| r.as_str())
+            .collect::<Vec<_>>(),
+        ["map_falls_short", "time_up"]
+    );
+    let (start, end) = (decisions[0].0, decisions[1].0);
+    assert_eq!(end - start, 40, "the time it was given");
+    let (_, followed) = replay(&options);
+    let (_, straight_home) = replay(&with(None));
+    let (a, b) = (followed.last().unwrap(), straight_home.last().unwrap());
+    assert_eq!((phase(a), phase(b)), ("complete", "complete"));
+    assert!(met(a) > met(b), "{} against {}", met(a), met(b));
+    assert_eq!(contacts(&followed), 0);
+    // Nothing gained is nothing to stay for.
+    let idle = with(Some(FollowUpConfig {
+        min_cells_per_drone_min: 1.0e9,
+        ..follow_up
+    }));
+    let ended = decided(&idle, "follow_up");
+    assert_eq!(ended[1].1, "little_gained");
+    assert_eq!(ended[1].0 - ended[0].0, 10, "its window");
+
+    let at = start as usize + 15;
+    let mut original = run_with(&options);
+    for _ in 0..at {
+        original.step().unwrap();
+    }
+    let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+    let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+    let mut resumed = run_with(&options);
+    resumed.restore(&checkpoint).expect("restore accepted");
+    for (k, frame) in followed.iter().enumerate().skip(at) {
+        resumed.step().unwrap();
+        let now = serde_json::to_value(resumed.last_frame().unwrap()).unwrap();
+        assert_eq!(&now, frame, "tick {k}");
+    }
+}
+
+/// A scan whose every drone has gone home for good is over, short of its
+/// gate: without that, the mission scans on with nothing to scan.
+#[test]
+fn a_scan_with_every_drone_home_ends() {
+    let mut options = whole_mission(None, None);
+    options.scan_coverage_threshold = Some(1.0);
+    options.exploration.as_mut().unwrap().follow_up = None;
+    let drones: Vec<String> = replay(&whole_mission(None, None)).1[0]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|node| node["is_mobile"] == true)
+        .map(|node| node["node_id"].as_str().unwrap().to_string())
+        .collect();
+    options.faults = Some(FaultManifest {
+        format: MANIFEST_FORMAT.into(),
+        version: MANIFEST_VERSION,
+        faults: drones
+            .into_iter()
+            .map(|node_id| Fault::MappingOutage {
+                node_id,
+                start_s: 20.0,
+                end_s: 1.0e6,
+            })
+            .collect(),
+    });
+    let (_, ended) = replay(&options);
+    assert_eq!(phase(ended.last().unwrap()), "complete");
+    let last = &ended.last().unwrap()["scan_mission_state"];
+    let threshold = last["scan_coverage_threshold"].as_f64().unwrap();
+    assert!(
+        last["scan_coverage_fraction"].as_f64().unwrap() < threshold,
+        "and is said to be short of its gate"
+    );
+    options.exploration.as_mut().unwrap().end_when_all_home = false;
+    let (_, open) = replay(&options);
+    assert_eq!(phase(open.last().unwrap()), "scanning");
 }

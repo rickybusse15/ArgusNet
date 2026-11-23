@@ -146,6 +146,14 @@ pub struct ExplorationConfig {
     /// requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plane_heights: bool,
+    /// Go on mapping what falls short once the points are inspected. Needs a
+    /// quality requirement. Absent goes home at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<FollowUpConfig>,
+    /// End the scan, short of its gate, when every drone is homeward for
+    /// good. Absent leaves the mission scanning with nothing to scan.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub end_when_all_home: bool,
     /// Send no drone, for another's sake, into what the map believes stands
     /// there, as none is sent into a wire. Absent looks at the ground alone.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -194,6 +202,50 @@ pub struct ExplorationConfig {
     /// physical guard stops.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mission_flights: Option<MissionFlightConfig>,
+}
+
+/// Flying on for the map once the mission's points are inspected: the drones
+/// with energy go back over what still falls short of the requirement, as the
+/// scan did, until there is little left, little comes of it, or time is up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FollowUpConfig {
+    /// The most time given to it, seconds.
+    pub max_s: f64,
+    /// Over which what it gains is judged, seconds.
+    pub window_s: f64,
+    /// The fewest cells brought to the requirement a drone-minute worth going
+    /// on for.
+    pub min_cells_per_drone_min: f64,
+    /// The share of cells flying could still bring to the requirement that
+    /// is not worth going on for.
+    pub enough_fraction: f64,
+}
+
+impl Default for FollowUpConfig {
+    fn default() -> Self {
+        Self {
+            max_s: 120.0,
+            window_s: 20.0,
+            min_cells_per_drone_min: 20.0,
+            enough_fraction: 0.02,
+        }
+    }
+}
+
+impl FollowUpConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, value, least) in [
+            ("max_s", self.max_s, f64::MIN_POSITIVE),
+            ("window_s", self.window_s, f64::MIN_POSITIVE),
+            ("min_cells_per_drone_min", self.min_cells_per_drone_min, 0.0),
+            ("enough_fraction", self.enough_fraction, 0.0),
+        ] {
+            if !(value.is_finite() && value >= least) {
+                return Err(format!("follow up {name} cannot be {value}"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// When a lost sensor sends a drone home, for good (F2).
@@ -494,6 +546,8 @@ impl Default for ExplorationConfig {
             view_planning: None,
             imaging: None,
             plane_heights: false,
+            follow_up: None,
+            end_when_all_home: false,
             separation_surface: false,
             navigation: None,
             map_report: false,
@@ -610,6 +664,12 @@ impl ExplorationConfig {
                     );
                 }
             }
+        }
+        if let Some(follow_up) = &self.follow_up {
+            if self.quality.is_none() {
+                return Err("a follow up needs a quality requirement to follow up on".into());
+            }
+            follow_up.validate()?;
         }
         if self.separation_surface
             && (self.wire_planning.is_none() || self.mission_flights.is_none())
