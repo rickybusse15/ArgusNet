@@ -124,6 +124,10 @@ goes home as ever. Measured on the seven tuning seeds at each site:
 Every run used its 120 s. On Montague City that is half to two thirds of the
 cells left short.
 
+It costs time: with both drones 180 s without GNSS, 13 of 14 runs are still out
+at 600 s. All 14 complete by 706 s with every gate passed. The drones do not know
+how long the run is.
+
 `end_when_all_home` (on in `field_v3`) ends a scan whose every drone is homeward
 for good (a lost sensor, its reserve). The mission used to scan on with nothing
 to scan. It closes the points no drone can reach, completes, and its coverage

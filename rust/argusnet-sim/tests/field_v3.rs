@@ -79,7 +79,7 @@ fn phase(frame: &Value) -> &str {
     frame["scan_mission_state"]["phase"].as_str().unwrap()
 }
 
-fn estimate<'a>(frame: &'a Value) -> &'a Value {
+fn estimate(frame: &Value) -> &Value {
     frame["navigation"]
         .as_array()
         .unwrap()
@@ -271,7 +271,7 @@ fn what_needs_navigation_is_refused_without_it() {
 fn decided(options: &RunOptions, kind: &str) -> Vec<(u64, String)> {
     let mut run = run_with(options);
     let mut found = Vec::new();
-    for tick in 0..bundle().steps as u64 {
+    for tick in 0..bundle().steps {
         run.step().unwrap();
         let driver = run
             .sim
