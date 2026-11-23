@@ -243,11 +243,14 @@ impl<A: Airspace> Search<'_, A> {
     }
 }
 
+/// A place in the search: steps east, north and up from the start.
+type Node = (i32, i32, i32);
+
 /// A node waiting to be expanded, cheapest first, then earliest found.
 struct Waiting {
     total_wh: f64,
     order: usize,
-    node: (i32, i32, i32),
+    node: Node,
 }
 
 impl PartialEq for Waiting {
@@ -302,7 +305,7 @@ pub fn plan(
     let z = |k: i32| start[2] + f64::from(k) * config.layer_m;
     let top_m = start[2].max(goal[2]) + config.max_climb_m;
     let low_m = start[2].min(goal[2]) - config.max_climb_m;
-    let point = |search: &Search<'_, _>, (i, j, k): (i32, i32, i32)| {
+    let point = |search: &Search<'_, _>, (i, j, k): Node| {
         let xy = search.xy(i, j);
         [xy[0], xy[1], z(k)]
     };
@@ -310,7 +313,7 @@ pub fn plan(
     // the change of height there is to make.
     let least = |at: [f64; 3]| battery.segment_cost_wh(at, goal);
     let root = (0, 0, 0);
-    let mut best: BTreeMap<(i32, i32, i32), (f64, Option<(i32, i32, i32)>)> = BTreeMap::new();
+    let mut best: BTreeMap<Node, (f64, Option<Node>)> = BTreeMap::new();
     let mut waiting = BinaryHeap::new();
     let mut order = 0;
     best.insert(root, (0.0, None));
