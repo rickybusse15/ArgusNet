@@ -5553,6 +5553,7 @@ mod tests {
             pod: None,
             wire_points: Vec::new(),
             wire_lines: Vec::new(),
+            pose: None,
         };
         grid.integrate(&scan, 4);
         map.publish(grid.snapshot(&config));

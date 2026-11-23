@@ -331,6 +331,10 @@ pub struct ReplayBeliefStats {
     /// Pod captures the map refused because the pod was stowed (SR2).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub stowed_scans: u64,
+    /// Captures the map refused because the aircraft was too lost to say
+    /// which cell they were of. Written only when there are some.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub misplaced_scans: u64,
     /// Measured wire evidence so far (W1): LiDAR points, cells with enough
     /// of them to be a hazard, and camera line detections. Written only when
     /// there are some.
@@ -377,6 +381,13 @@ pub struct ReplayQualityStats {
     /// Cells lacking only a fine enough image (SR4). Absent when none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub image_coarse_cells: u64,
+    /// Cells placed by too uncertain a pose, worth a revisit by a better
+    /// one, and those no aircraft's pose can better now (unreachable).
+    /// Absent when none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pose_uncertain_cells: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pose_limited_cells: u64,
     pub unreachable_cells: u64,
     /// Met over all cells.
     pub met_fraction: f64,
@@ -395,6 +406,8 @@ impl From<&crate::belief_world::QualityLayer> for ReplayQualityStats {
             sparse_cells: counts.sparse,
             stale_cells: counts.stale,
             image_coarse_cells: counts.image_coarse,
+            pose_uncertain_cells: counts.pose_uncertain,
+            pose_limited_cells: counts.pose_limited,
             unreachable_cells: counts.unreachable(),
             met_fraction: counts.met_fraction(),
             resolved_fraction: layer.resolved_fraction(),
@@ -663,6 +676,11 @@ pub struct ReplayFrame {
     /// This tick's range returns, per mobile platform.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub range_scans: Vec<ReplayRangeScan>,
+    /// Where each aircraft's navigation has it, and how well it knows
+    /// ([`crate::navigation`]): what its returns were placed by this tick.
+    /// Absent in a run that places them by the true pose.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub navigation: Vec<crate::navigation::PoseEstimate>,
     /// Platforms physics put back out of the ground or a structure this tick:
     /// the belief had them somewhere they could not be.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -942,6 +960,7 @@ impl ReplayWriter {
             belief_updates: Vec::new(),
             canopy_updates: Vec::new(),
             range_scans: Vec::new(),
+            navigation: Vec::new(),
             world_contacts: Vec::new(),
             tree_contacts: Vec::new(),
             active_faults: Vec::new(),

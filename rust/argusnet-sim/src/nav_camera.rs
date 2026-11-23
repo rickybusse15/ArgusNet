@@ -521,6 +521,7 @@ impl NavCamera {
             pod: None,
             wire_points: Vec::new(),
             wire_lines,
+            pose: None,
         }
     }
 }

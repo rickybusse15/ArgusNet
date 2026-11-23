@@ -174,6 +174,14 @@ impl WireTrackerConfig {
 struct Bin {
     n: u32,
     sum: [f64; 3],
+    /// Its points' pose sigmas, across and in height, summed: what the
+    /// aircraft did not know of where it was when it saw them.
+    #[serde(default, skip_serializing_if = "no_pose")]
+    pose: [f64; 2],
+}
+
+fn no_pose(pose: &[f64; 2]) -> bool {
+    *pose == [0.0; 2]
 }
 
 impl Bin {
@@ -341,10 +349,13 @@ impl WireTrack {
         )
     }
 
-    fn add(&mut self, point: [f64; 3]) {
+    fn add(&mut self, point: [f64; 3], pose_sigma_m: [f64; 2]) {
         let (s, _) = self.frame(point[0], point[1]);
         let bin = self.bins.entry((s / BIN_M).floor() as i32).or_default();
         bin.n += 1;
+        for (sum, sigma) in bin.pose.iter_mut().zip(pose_sigma_m) {
+            *sum += sigma;
+        }
         for (sum, value) in bin.sum.iter_mut().zip(point) {
             *sum += value;
         }
@@ -475,7 +486,19 @@ impl WireTrack {
                 && self.fit.s_max_m - self.fit.s_min_m >= config.confirm_length_m)
     }
 
+    /// What the poses behind its points leave uncertain, across and in
+    /// height: their mean, the most an average of them can be off by,
+    /// however their errors are related. More points do not shrink it.
+    fn pose_sigma_m(&self) -> [f64; 2] {
+        let n: u32 = self.bins.values().map(|bin| bin.n).sum();
+        std::array::from_fn(|k| {
+            let sum: f64 = self.bins.values().map(|bin| bin.pose[k]).sum();
+            sum / f64::from(n.max(1))
+        })
+    }
+
     fn estimate(&self, config: &WireTrackerConfig) -> WireEstimate {
+        let [pose_lateral, pose_vertical] = self.pose_sigma_m();
         // A pole is where the wire goes, however far past the evidence.
         let (s0, s1) = (
             self.ends[0].map_or(self.fit.s_min_m - config.extend_m, |end| end.s_m),
@@ -491,8 +514,14 @@ impl WireTrack {
             from_m,
             to_m,
             sag_m: (chord - self.height_at(middle)).max(0.0),
-            sigma_lateral_m: lateral_0.max(lateral_1).min(config.max_sigma_m),
-            sigma_vertical_m: vertical_0.max(vertical_1).min(config.max_sigma_m),
+            sigma_lateral_m: lateral_0
+                .max(lateral_1)
+                .min(config.max_sigma_m)
+                .hypot(pose_lateral),
+            sigma_vertical_m: vertical_0
+                .max(vertical_1)
+                .min(config.max_sigma_m)
+                .hypot(pose_vertical),
             observed_length_m: self.bins.len() as f64 * BIN_M,
             points: self.fit.points,
             camera_support: self.camera_support,
@@ -537,6 +566,12 @@ pub struct WireTracker {
     tracks: Vec<WireTrack>,
     next_id: u32,
     pending: VecDeque<[f64; 3]>,
+    /// How well the aircraft seeing now knows where it is, across and in
+    /// height, one sigma; and the worst behind any point still pending.
+    #[serde(default, skip_serializing_if = "no_pose")]
+    pose_sigma_m: [f64; 2],
+    #[serde(default, skip_serializing_if = "no_pose")]
+    pending_pose_m: [f64; 2],
     since_seeding: usize,
     lines: VecDeque<PendingLine>,
     /// The seeding generator: xorshift64, checkpointed with the rest.
@@ -550,6 +585,8 @@ impl WireTracker {
             tracks: Vec::new(),
             next_id: 0,
             pending: VecDeque::new(),
+            pose_sigma_m: [0.0; 2],
+            pending_pose_m: [0.0; 2],
             since_seeding: 0,
             lines: VecDeque::new(),
             draw: 0x9E37_79B9_7F4A_7C15,
@@ -578,6 +615,12 @@ impl WireTracker {
         x
     }
 
+    /// What follows is seen by an aircraft that knows where it is to
+    /// `[horizontal, vertical]` one sigma.
+    pub fn seen_from_pose(&mut self, sigma_m: [f64; 2]) {
+        self.pose_sigma_m = sigma_m;
+    }
+
     /// Take one scan's points: each to the first track that claims it, the
     /// rest to the seeding pool.
     pub fn add_points(&mut self, points: &[[f64; 3]]) {
@@ -592,12 +635,18 @@ impl WireTracker {
                 .position(|track| track.claims(point, &self.config));
             match claimed {
                 Some(k) => {
-                    self.tracks[k].add(point);
+                    self.tracks[k].add(point, self.pose_sigma_m);
                     touched[k] = true;
                 }
                 None => {
                     if self.pending.len() == self.config.pending_capacity {
                         self.pending.pop_front();
+                    }
+                    if self.pending.is_empty() {
+                        self.pending_pose_m = [0.0; 2];
+                    }
+                    for k in 0..2 {
+                        self.pending_pose_m[k] = self.pending_pose_m[k].max(self.pose_sigma_m[k]);
                     }
                     self.pending.push_back(point);
                     self.since_seeding += 1;
@@ -677,7 +726,7 @@ impl WireTracker {
         let mut kept = VecDeque::with_capacity(n);
         for point in self.pending.drain(..) {
             if near_chord(point, p, q, &self.config) {
-                track.add(point);
+                track.add(point, self.pending_pose_m);
             } else {
                 kept.push_back(point);
             }
@@ -688,7 +737,7 @@ impl WireTracker {
         self.pending = VecDeque::with_capacity(kept.len());
         for point in kept {
             if track.claims(point, &self.config) {
-                track.add(point);
+                track.add(point, self.pending_pose_m);
             } else {
                 self.pending.push_back(point);
             }
@@ -746,6 +795,9 @@ impl WireTracker {
             let (s, _) = joined.frame(mean[0], mean[1]);
             let into = joined.bins.entry((s / BIN_M).floor() as i32).or_default();
             into.n += bin.n;
+            for (sum, sigma) in into.pose.iter_mut().zip(bin.pose) {
+                *sum += sigma;
+            }
             for k in 0..3 {
                 into.sum[k] += bin.sum[k];
             }
@@ -833,7 +885,10 @@ impl WireTracker {
         let steps = ((span / BIN_M).ceil() as usize).max(2);
         for k in 0..=steps {
             let t = k as f64 / steps as f64;
-            track.add(std::array::from_fn(|i| start[i] + (end[i] - start[i]) * t));
+            track.add(
+                std::array::from_fn(|i| start[i] + (end[i] - start[i]) * t),
+                self.pose_sigma_m,
+            );
         }
         track.triangulated = true;
         track.refit(&self.config);
@@ -1049,6 +1104,39 @@ mod tests {
         WireTracker::new(WireTrackerConfig::default())
     }
 
+    /// A wire seen from a poorly known position is poorly known, however
+    /// many points; seen again from a well known one, better.
+    #[test]
+    fn a_wire_is_known_no_better_than_where_it_was_seen_from() {
+        let mut noise = Noise(11);
+        let (mut exact, mut lost) = (tracker(), tracker());
+        let points: Vec<Vec<[f64; 3]>> = (0..40)
+            .map(|_| scan(&mut noise, 5.0, 20.0, 180.0, 40))
+            .collect();
+        lost.seen_from_pose([1.5, 2.0]);
+        for points in &points {
+            exact.add_points(points);
+            lost.add_points(points);
+        }
+        let of = |tracker: &WireTracker| tracker.estimates()[0].clone();
+        let (a, b) = (of(&exact), of(&lost));
+        assert_eq!((a.from_m, a.points), (b.from_m, b.points), "the same wire");
+        assert!((b.sigma_lateral_m - a.sigma_lateral_m.hypot(1.5)).abs() < 1e-9);
+        assert!((b.sigma_vertical_m - a.sigma_vertical_m.hypot(2.0)).abs() < 1e-9);
+        lost.seen_from_pose([0.02, 0.02]);
+        for points in &points {
+            lost.add_points(points);
+        }
+        let again = of(&lost);
+        assert!(again.sigma_lateral_m < 0.8 * b.sigma_lateral_m);
+        assert!(again.sigma_lateral_m > 0.5, "half of it is still the first");
+        // A run that knows its poses writes nothing of them.
+        assert!(!serde_json::to_string(&exact).unwrap().contains("pose"));
+        let back: WireTracker =
+            serde_json::from_str(&serde_json::to_string(&lost).unwrap()).unwrap();
+        assert_eq!(back, lost);
+    }
+
     #[test]
     fn points_on_a_wire_seed_a_confirmed_track_with_its_sag() {
         let mut noise = Noise(11);
@@ -1175,7 +1263,7 @@ mod tests {
             } else {
                 43.0
             };
-            track.add([x, 0.0, z]);
+            track.add([x, 0.0, z], [0.0; 2]);
         }
         track.refit(&config);
         let (_, vertical) = track.sigmas_at(100.0);

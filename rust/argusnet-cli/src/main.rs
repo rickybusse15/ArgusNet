@@ -340,6 +340,14 @@ struct SimArgs {
     /// `max_image_gsd_m`. Every number is assumed.
     #[arg(long)]
     imaging: bool,
+    /// Estimate where each aircraft is from its own IMU, GNSS and heading,
+    /// and place what it senses there instead of at its true pose: `rtk`,
+    /// `standalone`, or a JSON file (`NavigationConfig`). The map's quality
+    /// then counts how well the pose was known. Needs `--world-knowledge
+    /// none`; with `--profile` the replay's profile id gains `+navigation`.
+    /// Every number is assumed.
+    #[arg(long)]
+    navigation: Option<String>,
     /// The imaging model's parameters as JSON (`ImagingConfig`), instead of
     /// the assumed default. Implies `--imaging`.
     #[arg(long)]
@@ -583,6 +591,15 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
             .view_planning
             .then(argusnet_planning::views::ViewPlanningConfig::default),
     };
+    let navigation = match args.navigation.as_deref() {
+        None => None,
+        Some("rtk") => Some(argusnet_sim::navigation::NavigationConfig::rtk()),
+        Some("standalone") => Some(argusnet_sim::navigation::NavigationConfig::standalone()),
+        Some(path) => {
+            let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+            Some(serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?)
+        }
+    };
     let imaging = match &args.imaging_profile {
         Some(path) => {
             let text = std::fs::read_to_string(path)
@@ -690,6 +707,12 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 .map(RunOptions::read_faults)
                 .transpose()?,
             sensor_rates: RunOptions::sensor_rate_table(&args.sensor_rate)?,
+            exploration: profile.options().exploration.map(|exploration| {
+                argusnet_sim::belief_world::ExplorationConfig {
+                    navigation,
+                    ..exploration
+                }
+            }),
             ..profile.options()
         });
     }
@@ -731,6 +754,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
         exploration: (args.pursuit.is_some()
             || args.explore.is_some()
             || args.wire_prior
+            || navigation.is_some()
             || args.belief_flights
             || measured_wires.is_some()
             || nav_camera.is_some()
@@ -766,6 +790,7 @@ fn run_options(args: &SimArgs) -> Result<argusnet_sim::run_options::RunOptions, 
                 view_planning: view_planning.clone(),
                 imaging: imaging.clone(),
                 plane_heights: args.plane_heights,
+                navigation: navigation.clone(),
                 fault_return: args
                     .fault_return
                     .then(argusnet_sim::belief_world::FaultReturnConfig::default),
@@ -1000,6 +1025,16 @@ fn sim(args: SimArgs) -> ExitCode {
             EXIT_INVALID,
             "--explore chooses what search drones fly in a --world-knowledge none run; \
              a prior run always flies its lanes",
+        );
+    }
+    if args.navigation.is_some()
+        && args.profile.is_none()
+        && matches!(args.world_knowledge, WorldKnowledgeArg::Prior)
+    {
+        return fail(
+            EXIT_INVALID,
+            "--navigation places what a --world-knowledge none run senses; a prior run maps \
+             nothing",
         );
     }
     if args.wire_prior && matches!(args.world_knowledge, WorldKnowledgeArg::Prior) {

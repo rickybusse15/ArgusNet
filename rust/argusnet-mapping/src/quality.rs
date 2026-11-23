@@ -16,6 +16,8 @@
 //! | [`DeficitReason::BiasLimited`] | Nothing a revisit can do |
 //! | [`DeficitReason::ImageCoarse`] | An image from nearer (SR4) |
 //! | [`DeficitReason::ImageLimited`] | Nothing: no flight gets that near |
+//! | [`DeficitReason::PoseUncertain`] | A revisit that knows better where it is |
+//! | [`DeficitReason::PoseLimited`] | Nothing, while no aircraft knows better |
 //!
 //! **Bias-limited** is the case that matters most for planning. A declared
 //! systematic error (boresight, calibration) is shared by every return, so
@@ -23,6 +25,12 @@
 //! alone exceeds the requirement, no number of passes meets it, and a
 //! planner that kept revisiting would never finish. Such a cell is
 //! **unreachable**, reported with its reason, never complete.
+//!
+//! **The pose behind a return** is shared the same way, by every return of a
+//! pass, so a count does not shrink it either. Passes share it in part, by
+//! how long a navigation error lasts, which the map does not know. Its part
+//! of a cell's sigma is the weighted mean of its returns' own pose sigmas:
+//! the most the weighted mean's can be, however their errors are related.
 //!
 //! Occlusion and rejected evidence are named by the guide too. They need
 //! evidence this map does not yet keep (per-ray occlusion, an admission
@@ -52,6 +60,10 @@ pub struct QualityRequirement {
     /// (SR4). Needs the imaging model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_image_gsd_m: Option<f64>,
+    /// One-sigma horizontal uncertainty of where the cell's returns are,
+    /// metres. Needs the pose behind them to be estimated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_horizontal_sigma_m: Option<f64>,
     /// The steepest-from-nadir ray whose ground return is accepted, degrees.
     /// Returns from shallower rays are seen but not accepted.
     pub max_incidence_deg: f64,
@@ -73,6 +85,7 @@ impl QualityRequirement {
         positive("max_vertical_sigma_m", self.max_vertical_sigma_m)?;
         positive("max_age_s", self.max_age_s)?;
         positive("max_image_gsd_m", self.max_image_gsd_m)?;
+        positive("max_horizontal_sigma_m", self.max_horizontal_sigma_m)?;
         if !(self.max_incidence_deg.is_finite()
             && self.max_incidence_deg > 0.0
             && self.max_incidence_deg <= 90.0)
@@ -92,14 +105,29 @@ impl QualityRequirement {
             && self.max_vertical_sigma_m.is_none()
             && self.max_age_s.is_none()
             && self.max_image_gsd_m.is_none()
+            && self.max_horizontal_sigma_m.is_none()
         {
             return Err(
-                "a quality requirement must name a density, a vertical sigma, an age or an \
-                 image sample distance"
+                "a quality requirement must name a density, a vertical or horizontal sigma, \
+                 an age or an image sample distance"
                     .into(),
             );
         }
         Ok(())
+    }
+
+    /// Whether a pose known to `[vertical, horizontal]` one sigma leaves a
+    /// cell of this slope short on its own, with nothing but the declared
+    /// bias beside it.
+    fn pose_falls_short(&self, [vertical_m, horizontal_m]: [f64; 2], slope: f64) -> bool {
+        self.max_vertical_sigma_m.is_some_and(|max| {
+            vertical_m
+                .hypot(slope * horizontal_m)
+                .hypot(self.bias_floor_m)
+                > max
+        }) || self
+            .max_horizontal_sigma_m
+            .is_some_and(|max| horizontal_m > max)
     }
 
     /// Whether the declared bias alone exceeds the vertical requirement:
@@ -131,10 +159,14 @@ pub enum DeficitReason {
     ImageCoarse,
     /// The image requirement is finer than any flight gets (SR4).
     ImageLimited,
+    /// The pose its returns were placed by was too uncertain.
+    PoseUncertain,
+    /// And no aircraft's is good enough now.
+    PoseLimited,
 }
 
 impl DeficitReason {
-    pub const ALL: [DeficitReason; 8] = [
+    pub const ALL: [DeficitReason; 10] = [
         DeficitReason::Met,
         DeficitReason::Unseen,
         DeficitReason::TooOblique,
@@ -143,14 +175,19 @@ impl DeficitReason {
         DeficitReason::Stale,
         DeficitReason::ImageCoarse,
         DeficitReason::ImageLimited,
+        DeficitReason::PoseUncertain,
+        DeficitReason::PoseLimited,
     ];
 
-    /// Whether flying more could fix it: everything but met and the two
+    /// Whether flying more could fix it: everything but met and the
     /// limits.
     pub fn is_improvable(self) -> bool {
         !matches!(
             self,
-            DeficitReason::Met | DeficitReason::BiasLimited | DeficitReason::ImageLimited
+            DeficitReason::Met
+                | DeficitReason::BiasLimited
+                | DeficitReason::ImageLimited
+                | DeficitReason::PoseLimited
         )
     }
 
@@ -164,6 +201,8 @@ impl DeficitReason {
             DeficitReason::Stale => "stale",
             DeficitReason::ImageCoarse => "image_coarse",
             DeficitReason::ImageLimited => "image_limited",
+            DeficitReason::PoseUncertain => "pose_uncertain",
+            DeficitReason::PoseLimited => "pose_limited",
         }
     }
 }
@@ -207,13 +246,20 @@ impl From<PlaneMoments> for [f64; 7] {
 impl PlaneMoments {
     /// One more return, `u`, `v` from the cell's centre, at height `z`.
     pub fn add(&mut self, u: f64, v: f64, z: f64) {
-        self.u += u;
-        self.v += v;
-        self.uu += u * u;
-        self.uv += u * v;
-        self.vv += v * v;
-        self.uz += u * z;
-        self.vz += v * z;
+        self.add_weighted(1.0, u, v, z);
+    }
+
+    /// One that counts for `w` ([`pose_weight`]): with an estimated pose, the
+    /// moments are weighted as [`PoseEvidence`]'s sums are.
+    pub fn add_weighted(&mut self, w: f64, u: f64, v: f64, z: f64) {
+        let (wu, wv) = (w * u, w * v);
+        self.u += wu;
+        self.v += wv;
+        self.uu += wu * u;
+        self.uv += wu * v;
+        self.vv += wv * v;
+        self.uz += wu * z;
+        self.vz += wv * z;
     }
 }
 
@@ -228,6 +274,10 @@ pub struct PlaneFit {
     /// returns spread evenly about the centre, more the further from it
     /// they fell.
     pub leverage: f64,
+    /// The variance the poses leave the centre height, over the returns'
+    /// weighted sum of squared pose sigmas: the most it can be, however the
+    /// poses' errors are related. Zero without estimated poses.
+    pub pose_gain: f64,
 }
 
 /// The plane through a cell's accepted returns, at the centre. `None` without
@@ -239,9 +289,33 @@ pub fn plane_fit(evidence: &CellEvidence) -> Option<PlaneFit> {
     if evidence.accepted_returns < 4 {
         return None;
     }
-    let n = evidence.accepted_returns as f64;
+    // With estimated poses every sum is weighted: `n` is the weight, and
+    // `count` the returns of equal weight that would say as much.
+    let posed = evidence.pose.filter(|pose| pose.weight > 0.0);
+    let (n, z_sum, zz_sum, count) = match posed {
+        Some(pose) => (
+            pose.weight,
+            pose.height_m,
+            pose.height_sq_m2,
+            pose.weight * pose.weight / pose.weight_sq,
+        ),
+        None => {
+            let n = evidence.accepted_returns as f64;
+            (
+                n,
+                evidence.accepted_height_sum_m,
+                evidence.accepted_height_sq_sum_m2,
+                n,
+            )
+        }
+    };
+    if count < 3.5 {
+        return None;
+    }
+    // What one return of that many counts for.
+    let each = if posed.is_some() { n / count } else { 1.0 };
     let (u, v) = (m.u / n, m.v / n);
-    let z = evidence.accepted_height_sum_m / n;
+    let z = z_sum / n;
     let suu = m.uu - n * u * u;
     let suv = m.uv - n * u * v;
     let svv = m.vv - n * v * v;
@@ -250,7 +324,8 @@ pub fn plane_fit(evidence: &CellEvidence) -> Option<PlaneFit> {
     if det <= 1e-9 * (suu + svv) * (suu + svv) {
         return None;
     }
-    let leverage = 1.0 / n + (svv * u * u - 2.0 * suv * u * v + suu * v * v) / det;
+    let gain = 1.0 / n + (svv * u * u - 2.0 * suv * u * v + suu * v * v) / det;
+    let leverage = gain * each;
     if !(leverage.is_finite() && leverage <= 1.0) {
         return None;
     }
@@ -258,24 +333,61 @@ pub fn plane_fit(evidence: &CellEvidence) -> Option<PlaneFit> {
     let svz = m.vz - n * v * z;
     let east = (svv * suz - suv * svz) / det;
     let north = (suu * svz - suv * suz) / det;
-    let szz = evidence.accepted_height_sq_sum_m2 - n * z * z;
+    let szz = zz_sum - n * z * z;
     Some(PlaneFit {
         height_m: z - east * u - north * v,
-        residual_m2: ((szz - east * suz - north * svz) / (n - 3.0)).max(0.0),
+        residual_m2: ((szz - east * suz - north * svz) / each / (count - 3.0)).max(0.0),
         leverage,
+        pose_gain: if posed.is_some() { gain } else { 0.0 },
     })
 }
 
 /// A cell's height at its centre: its accepted returns' plane there, or their
 /// mean where no plane is fitted. `None` with no accepted return.
 pub fn centre_height_m(evidence: &CellEvidence) -> Option<f64> {
-    if evidence.accepted_returns == 0 {
-        return None;
+    let mean = evidence.mean_height_m()?;
+    Some(plane_fit(evidence).map_or(mean, |fit| fit.height_m))
+}
+
+/// What the poses behind a cell's accepted returns leave uncertain. Sums over
+/// those returns, each weighted by [`pose_weight`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PoseEvidence {
+    pub weight: f64,
+    pub height_m: f64,
+    pub vertical_sigma_m: f64,
+    pub horizontal_sigma_m: f64,
+    /// For a plane through them ([`plane_fit`]): the weighted sums of their
+    /// squared heights and sigmas, and the sum of their squared weights.
+    pub height_sq_m2: f64,
+    pub vertical_sq_m2: f64,
+    pub horizontal_sq_m2: f64,
+    pub weight_sq: f64,
+    /// How steep the ground is here, rise over run: what a return in the
+    /// wrong place does to the height.
+    pub slope: f64,
+    /// The best `[vertical, horizontal]` one sigma any aircraft is placing
+    /// returns by now; `None` when none is.
+    pub best_now_m: Option<[f64; 2]>,
+}
+
+impl PoseEvidence {
+    /// The cell's `[vertical, horizontal]` one sigma from its poses.
+    fn sigmas_m(&self) -> Option<[f64; 2]> {
+        (self.weight > 0.0).then(|| {
+            [
+                self.vertical_sigma_m / self.weight,
+                self.horizontal_sigma_m / self.weight,
+            ]
+        })
     }
-    Some(plane_fit(evidence).map_or(
-        evidence.accepted_height_sum_m / evidence.accepted_returns as f64,
-        |fit| fit.height_m,
-    ))
+}
+
+/// How much a return counts for, placed by a pose whose vertical one sigma
+/// is this: a well-placed return outweighs a badly placed one, and below
+/// 5 cm they are all alike.
+pub fn pose_weight(vertical_sigma_m: f64) -> f64 {
+    1.0 / (vertical_sigma_m * vertical_sigma_m + 0.05 * 0.05)
 }
 
 /// One cell's accepted evidence, as the map keeps it.
@@ -298,6 +410,22 @@ pub struct CellEvidence {
     /// With `plane` and none fitted: the variance of the ground over the cell
     /// that its neighbours' heights show, m². Zero for none.
     pub relief_m2: f64,
+    /// The poses its accepted returns were placed by; `None` when they were
+    /// placed by the true one.
+    pub pose: Option<PoseEvidence>,
+}
+
+impl CellEvidence {
+    /// The accepted returns' mean height; `None` with none.
+    pub fn mean_height_m(&self) -> Option<f64> {
+        if self.accepted_returns == 0 {
+            return None;
+        }
+        Some(match self.pose.filter(|pose| pose.weight > 0.0) {
+            Some(pose) => pose.height_m / pose.weight,
+            None => self.accepted_height_sum_m / f64::from(self.accepted_returns),
+        })
+    }
 }
 
 /// One cell's quality against a requirement.
@@ -309,6 +437,9 @@ pub struct CellQuality {
     /// Estimated one-sigma vertical uncertainty; `None` with no accepted
     /// return.
     pub vertical_sigma_m: Option<f64>,
+    /// Estimated one-sigma horizontal uncertainty of where its accepted
+    /// returns are; `None` without an estimated pose behind them.
+    pub horizontal_sigma_m: Option<f64>,
 }
 
 /// A plane's squared error at a cell's centre, over the variance the ground's
@@ -327,7 +458,7 @@ pub const CURVATURE_VARIANCE: f64 = 1.25;
 /// One-sigma vertical uncertainty of a cell's height: the spread of its
 /// accepted returns (never taken below `per_return_sigma_m`, the sensor's
 /// declared range noise) over the root of their count, combined with the
-/// shared bias, which no count reduces.
+/// shared bias and the poses' own uncertainty, which no count reduces.
 ///
 /// With [`CellEvidence::plane`] it is the uncertainty of the height at the
 /// centre ([`centre_height_m`]). Where a plane is fitted, the spread is about
@@ -350,8 +481,15 @@ pub fn vertical_sigma_m(
     if let Some(fit) = plane_fit(evidence) {
         let per_return_sq = fit.residual_m2.max(floor_sq);
         let curved_sq = CURVATURE_VARIANCE * (fit.residual_m2 - floor_sq).max(0.0);
+        // The centre height is a weighted sum of the returns' heights, and
+        // Cauchy-Schwarz bounds what their pose errors do to it: a plane
+        // leaning on badly placed returns to one side makes more of them.
+        let pose_sq = evidence.pose.as_ref().map_or(0.0, |pose| {
+            fit.pose_gain * (pose.vertical_sq_m2 + pose.slope * pose.slope * pose.horizontal_sq_m2)
+        });
         return Some(
-            (per_return_sq * fit.leverage + curved_sq + bias_floor_m * bias_floor_m).sqrt(),
+            (per_return_sq * fit.leverage + curved_sq + bias_floor_m * bias_floor_m + pose_sq)
+                .sqrt(),
         );
     }
     let count = n as f64;
@@ -366,12 +504,18 @@ pub fn vertical_sigma_m(
     } else {
         (spread_sq.max(floor_sq), count)
     };
-    Some((per_return_sq / count + bias_floor_m * bias_floor_m).sqrt())
+    let pose_sq = evidence.pose.as_ref().map_or(0.0, |pose| {
+        pose.sigmas_m().map_or(0.0, |[vertical, horizontal]| {
+            vertical * vertical + (pose.slope * horizontal).powi(2)
+        })
+    });
+    Some((per_return_sq / count + bias_floor_m * bias_floor_m + pose_sq).sqrt())
 }
 
 /// A cell's quality against `requirement`. The first reason that applies,
 /// in the order the guide's table lists them: unseen, too oblique,
-/// bias-limited, image-limited, sparse, stale, image-coarse.
+/// bias-limited, image-limited, the pose behind them, sparse, stale,
+/// image-coarse.
 /// `finest_image_gsd_m` is the finest image any flight gets.
 pub fn assess(
     evidence: &CellEvidence,
@@ -382,6 +526,10 @@ pub fn assess(
 ) -> CellQuality {
     let density_per_m2 = evidence.accepted_returns as f64 / cell_area_m2.max(f64::MIN_POSITIVE);
     let vertical_sigma_m = vertical_sigma_m(evidence, per_return_sigma_m, requirement.bias_floor_m);
+    let pose_sigmas = evidence.pose.as_ref().and_then(PoseEvidence::sigmas_m);
+    let pose_short = evidence
+        .pose
+        .filter(|pose| pose_sigmas.is_some_and(|s| requirement.pose_falls_short(s, pose.slope)));
     let reason = if evidence.ground_returns == 0 {
         DeficitReason::Unseen
     } else if evidence.accepted_returns == 0 {
@@ -394,6 +542,14 @@ pub fn assess(
         .is_some_and(|(max, finest)| finest > max)
     {
         DeficitReason::ImageLimited
+    } else if let Some(pose) = pose_short {
+        // A revisit helps only if some aircraft now knows better.
+        match pose.best_now_m {
+            Some(best) if requirement.pose_falls_short(best, pose.slope) => {
+                DeficitReason::PoseLimited
+            }
+            _ => DeficitReason::PoseUncertain,
+        }
     } else if requirement
         .min_ground_density_per_m2
         .is_some_and(|min| density_per_m2 < min)
@@ -421,6 +577,7 @@ pub fn assess(
         reason,
         density_per_m2,
         vertical_sigma_m,
+        horizontal_sigma_m: pose_sigmas.map(|[_, horizontal]| horizontal),
     }
 }
 
@@ -437,6 +594,14 @@ pub struct DeficitCounts {
     pub image_coarse: u64,
     #[serde(default)]
     pub image_limited: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pose_uncertain: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pose_limited: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 impl DeficitCounts {
@@ -450,6 +615,8 @@ impl DeficitCounts {
             DeficitReason::Stale => &mut self.stale,
             DeficitReason::ImageCoarse => &mut self.image_coarse,
             DeficitReason::ImageLimited => &mut self.image_limited,
+            DeficitReason::PoseUncertain => &mut self.pose_uncertain,
+            DeficitReason::PoseLimited => &mut self.pose_limited,
         } += 1;
     }
 
@@ -462,6 +629,8 @@ impl DeficitCounts {
             + self.stale
             + self.image_coarse
             + self.image_limited
+            + self.pose_uncertain
+            + self.pose_limited
     }
 
     /// The share of cells that meet the requirement.
@@ -471,7 +640,7 @@ impl DeficitCounts {
 
     /// Cells no amount of flying can bring to the requirement.
     pub fn unreachable(&self) -> u64 {
-        self.bias_limited + self.image_limited
+        self.bias_limited + self.image_limited + self.pose_limited
     }
 }
 
@@ -485,6 +654,7 @@ mod tests {
             max_vertical_sigma_m: Some(0.5),
             max_age_s: Some(60.0),
             max_image_gsd_m: None,
+            max_horizontal_sigma_m: None,
             max_incidence_deg: 45.0,
             bias_floor_m: 0.1,
         }
@@ -501,6 +671,7 @@ mod tests {
             image_gsd_m: None,
             plane: None,
             relief_m2: 0.0,
+            pose: None,
         }
     }
 
@@ -698,10 +869,208 @@ mod tests {
             image_gsd_m: None,
             plane: None,
             relief_m2: 0.0,
+            pose: None,
         };
         // Sample variance 8, over 2, plus bias²: sqrt(4.01).
         let s = vertical_sigma_m(&spread, 0.3, 0.1).unwrap();
         assert!((s - 4.01f64.sqrt()).abs() < 1e-12, "{s}");
+    }
+
+    /// `n` returns, each placed by a pose known to these sigmas.
+    fn posed(n: u32, vertical: f64, horizontal: f64, slope: f64) -> CellEvidence {
+        let weight = pose_weight(vertical);
+        let total = weight * f64::from(n);
+        CellEvidence {
+            pose: Some(PoseEvidence {
+                weight: total,
+                height_m: total * 10.0,
+                vertical_sigma_m: total * vertical,
+                horizontal_sigma_m: total * horizontal,
+                slope,
+                ..PoseEvidence::default()
+            }),
+            ..evidence(n, 10.0, 0.0)
+        }
+    }
+
+    #[test]
+    fn no_count_averages_away_the_pose_behind_the_returns() {
+        let many = vertical_sigma_m(&posed(100_000, 0.4, 0.0, 0.0), 0.3, 0.1).unwrap();
+        assert!((many - 0.4f64.hypot(0.1)).abs() < 1e-3, "{many}");
+        // A return in the wrong place on a slope is at the wrong height.
+        let steep = vertical_sigma_m(&posed(100_000, 0.0, 2.0, 0.25), 0.3, 0.1).unwrap();
+        assert!((steep - 0.5f64.hypot(0.1)).abs() < 1e-3, "{steep}");
+        // And a pose known exactly changes nothing.
+        assert_eq!(
+            vertical_sigma_m(&posed(8, 0.0, 0.0, 0.5), 0.3, 0.1),
+            vertical_sigma_m(&evidence(8, 10.0, 0.0), 0.3, 0.1)
+        );
+    }
+
+    /// However the returns' pose errors are related, the claim is no less
+    /// than the weighted mean's true sigma: checked at the worst, all the
+    /// same error, and for two passes that differ.
+    #[test]
+    fn the_pose_s_part_is_never_claimed_too_small() {
+        let (bad, good) = (2.0f64, 0.02f64);
+        let (wb, wg) = (pose_weight(bad), pose_weight(good));
+        let pose = PoseEvidence {
+            weight: 30.0 * (wb + wg),
+            vertical_sigma_m: 30.0 * (wb * bad + wg * good),
+            ..PoseEvidence::default()
+        };
+        let [claimed, _] = pose.sigmas_m().unwrap();
+        for correlation in [-1.0, 0.0, 0.5, 1.0] {
+            let (a, b) = (wb * bad / (wb + wg), wg * good / (wb + wg));
+            let truth = (a * a + b * b + 2.0 * correlation * a * b).sqrt();
+            assert!(claimed >= truth - 1e-12, "{claimed} under {truth}");
+        }
+        // A good pass over a bad one is what the cell becomes.
+        assert!(claimed < 0.025, "{claimed}");
+    }
+
+    /// `(u, v, z, [vertical, horizontal] sigma)` returns, kept as the map
+    /// keeps them with estimated poses and plane heights.
+    fn posed_plane(returns: &[(f64, f64, f64, [f64; 2])]) -> CellEvidence {
+        let mut plane = PlaneMoments::default();
+        let mut pose = PoseEvidence::default();
+        let (mut sum, mut sq) = (0.0, 0.0);
+        for &(u, v, z, [vertical, horizontal]) in returns {
+            let w = pose_weight(vertical);
+            plane.add_weighted(w, u, v, z);
+            pose.weight += w;
+            pose.height_m += w * z;
+            pose.height_sq_m2 += w * z * z;
+            pose.vertical_sigma_m += w * vertical;
+            pose.horizontal_sigma_m += w * horizontal;
+            pose.vertical_sq_m2 += w * vertical * vertical;
+            pose.horizontal_sq_m2 += w * horizontal * horizontal;
+            pose.weight_sq += w * w;
+            sum += z;
+            sq += z * z;
+        }
+        CellEvidence {
+            ground_returns: returns.len() as u32,
+            accepted_returns: returns.len() as u32,
+            accepted_height_sum_m: sum,
+            accepted_height_sq_sum_m2: sq,
+            accepted_age_s: Some(0.0),
+            plane: Some(plane),
+            pose: Some(pose),
+            ..CellEvidence::default()
+        }
+    }
+
+    fn grid(f: impl Fn(f64, f64) -> (f64, [f64; 2])) -> Vec<(f64, f64, f64, [f64; 2])> {
+        let mut returns = Vec::new();
+        for i in -2..=2 {
+            for j in -2..=2 {
+                let (u, v) = (f64::from(i), f64::from(j) * 0.9 + 0.2);
+                let (z, sigmas) = f(u, v);
+                returns.push((u, v, z, sigmas));
+            }
+        }
+        returns
+    }
+
+    /// Returns all placed alike weigh alike, whatever that weight is: the
+    /// plane is the one fitted without poses, and their sigma is added whole.
+    #[test]
+    fn a_plane_through_returns_placed_alike_is_the_unposed_one() {
+        for sigma in [0.0, 0.02, 0.8] {
+            let returns = grid(|u, v| (50.0 + 0.3 * u - 0.2 * v + 0.1 * (u * v).sin(), [sigma; 2]));
+            let posed = posed_plane(&returns);
+            let mut plane = PlaneMoments::default();
+            for &(u, v, z, _) in &returns {
+                plane.add(u, v, z);
+            }
+            let plain = CellEvidence {
+                plane: Some(plane),
+                pose: None,
+                ..posed
+            };
+            let (a, b) = (plane_fit(&posed).unwrap(), plane_fit(&plain).unwrap());
+            assert!((a.height_m - b.height_m).abs() < 1e-9);
+            assert!((a.residual_m2 - b.residual_m2).abs() < 1e-9);
+            assert!((a.leverage - b.leverage).abs() < 1e-12);
+            let (a, b) = (
+                vertical_sigma_m(&posed, 0.05, 0.1).unwrap(),
+                vertical_sigma_m(&plain, 0.05, 0.1).unwrap(),
+            );
+            let gain = (a * a - b * b) / (sigma * sigma).max(1e-300);
+            assert!(
+                sigma == 0.0 && (a - b).abs() < 1e-9 || (1.0..1.2).contains(&gain),
+                "{sigma}: {gain}"
+            );
+        }
+    }
+
+    /// A pass placed 3 m high by an aircraft that knows it is lost barely
+    /// moves a plane through a good pass; the good pass alone sets the claim.
+    #[test]
+    fn a_well_placed_pass_sets_the_plane() {
+        let truth = |u: f64, v: f64| 50.0 + 0.3 * u - 0.2 * v;
+        let mut returns = grid(|u, v| (truth(u, v), [0.02, 0.02]));
+        returns.extend(grid(|u, v| (truth(u, v) + 3.0, [3.0, 3.0])));
+        let cell = posed_plane(&returns);
+        let height = centre_height_m(&cell).unwrap();
+        assert!((height - 50.0).abs() < 0.01, "{height}");
+        let sigma = vertical_sigma_m(&cell, 0.05, 0.1).unwrap();
+        assert!(sigma < 0.2, "{sigma}");
+    }
+
+    /// Worst case: the poses' errors conspire. Whatever signs they take, the
+    /// centre height moves by no more than the claim's pose part, even where
+    /// the returns lie to one side and the plane reaches out to the centre.
+    #[test]
+    fn no_pose_errors_move_a_plane_by_more_than_is_claimed() {
+        let sigma_of = |u: f64| if u > 0.0 { 0.6 } else { 0.1 };
+        for side in [0.0, 1.5] {
+            let sound = grid(|u, v| (10.0 + 0.1 * u + 0.1 * v, [sigma_of(u), 0.0]))
+                .into_iter()
+                .map(|(u, v, z, s)| (u + side, v, z, s))
+                .collect::<Vec<_>>();
+            let base = posed_plane(&sound);
+            let fit = plane_fit(&base).unwrap();
+            let claim = (fit.pose_gain * base.pose.unwrap().vertical_sq_m2).sqrt();
+            // The sign of each return's pull on the centre, so the worst sum.
+            let mut worst = 0.0;
+            for k in 0..sound.len() {
+                let mut moved = sound.clone();
+                moved[k].2 += moved[k].3[0];
+                worst += (plane_fit(&posed_plane(&moved)).unwrap().height_m - fit.height_m).abs();
+            }
+            assert!(claim >= worst - 1e-9, "{claim} under {worst}");
+            assert!(claim < 2.5 * worst, "{claim} over {worst}");
+        }
+    }
+
+    #[test]
+    fn a_badly_placed_cell_is_worth_a_revisit_only_by_a_better_pose() {
+        let r = requirement();
+        let reason = |best| {
+            let mut e = posed(50, 0.8, 0.5, 0.0);
+            e.pose.as_mut().unwrap().best_now_m = best;
+            assess(&e, 100.0, 0.3, None, &r).reason
+        };
+        assert_eq!(reason(Some([0.02, 0.02])), DeficitReason::PoseUncertain);
+        assert_eq!(reason(Some([0.6, 0.4])), DeficitReason::PoseLimited);
+        assert_eq!(reason(None), DeficitReason::PoseUncertain);
+        assert!(DeficitReason::PoseUncertain.is_improvable());
+        assert!(!DeficitReason::PoseLimited.is_improvable());
+        // Horizontally, only when the requirement asks.
+        let sideways = posed(50, 0.02, 1.5, 0.0);
+        assert_eq!(
+            assess(&sideways, 100.0, 0.3, None, &r).reason,
+            DeficitReason::Met
+        );
+        let placed = QualityRequirement {
+            max_horizontal_sigma_m: Some(1.0),
+            ..r
+        };
+        let quality = assess(&sideways, 100.0, 0.3, None, &placed);
+        assert_eq!(quality.reason, DeficitReason::PoseUncertain);
+        assert!((quality.horizontal_sigma_m.unwrap() - 1.5).abs() < 1e-12);
     }
 
     #[test]
@@ -711,9 +1080,9 @@ mod tests {
             counts.add(reason);
         }
         counts.add(DeficitReason::Met);
-        assert_eq!(counts.total(), 9);
-        assert!((counts.met_fraction() - 2.0 / 9.0).abs() < 1e-12);
-        assert_eq!(counts.unreachable(), 2);
+        assert_eq!(counts.total(), 11);
+        assert!((counts.met_fraction() - 2.0 / 11.0).abs() < 1e-12);
+        assert_eq!(counts.unreachable(), 3);
         assert!(!DeficitReason::BiasLimited.is_improvable());
         assert!(DeficitReason::Stale.is_improvable());
         assert_eq!(DeficitCounts::default().met_fraction(), 0.0);

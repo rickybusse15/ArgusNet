@@ -66,6 +66,8 @@ pub struct WireGovernor {
     hold_braking_mps2: Option<f64>,
     /// How fast such a platform flies home (F2); `None` holds it.
     blind_speed_mps: Option<f64>,
+    /// How much wider each aircraft keeps clear for not knowing where it is.
+    flown: Option<crate::navigation::FlownPositions>,
 }
 
 impl WireGovernor {
@@ -88,6 +90,7 @@ impl WireGovernor {
             held: BTreeSet::new(),
             hold_braking_mps2: None,
             blind_speed_mps: None,
+            flown: None,
         }
     }
 
@@ -95,6 +98,21 @@ impl WireGovernor {
     pub fn with_hold_braking(mut self, braking_mps2: Option<f64>) -> Self {
         self.hold_braking_mps2 = braking_mps2;
         self
+    }
+
+    /// Keep each aircraft clear by more the less well it knows where it is.
+    pub fn with_flown_positions(
+        mut self,
+        flown: Option<crate::navigation::FlownPositions>,
+    ) -> Self {
+        self.flown = flown;
+        self
+    }
+
+    fn margin_m(&self, node_id: &str) -> [f64; 2] {
+        self.flown
+            .as_ref()
+            .map_or([0.0; 2], |flown| flown.margin_m(node_id))
     }
 
     /// Fly a platform whose navigation camera is out home at
@@ -129,7 +147,14 @@ impl WireGovernor {
 
     /// The height to fly from `flown_m` toward `commanded_m` for the wires
     /// believed, and whether a wire bounds it.
-    fn wire_height(&self, flown: Governed, commanded_m: [f64; 3], dt_s: f64, held: bool) -> f64 {
+    fn wire_height(
+        &self,
+        flown: Governed,
+        commanded_m: [f64; 3],
+        dt_s: f64,
+        held: bool,
+        margin_m: [f64; 2],
+    ) -> f64 {
         let Some(config) = &self.config else {
             return commanded_m[2];
         };
@@ -143,7 +168,8 @@ impl WireGovernor {
             [0.0, 0.0]
         };
         let reach = (step / dt_s.max(1e-6) * config.lookahead_s).max(config.min_reach_m);
-        let bounds = map.hazard_bounds_ahead([fx, fy], direction, reach, fz, config.clearance_m);
+        let bounds =
+            map.hazard_bounds_within([fx, fy], direction, reach, fz, config.clearance_m, margin_m);
         let mut wanted = commanded_m[2];
         if let Some(ceiling) = bounds.ceiling_m {
             let lowest = map.ground_at(fx, fy) + config.min_agl_m;
@@ -174,7 +200,7 @@ impl WireGovernor {
     /// [`Self::wire_height`], under its old name for the tests.
     #[cfg(test)]
     fn height(&self, flown: Governed, commanded_m: [f64; 3], dt_s: f64, held: bool) -> f64 {
-        self.wire_height(flown, commanded_m, dt_s, held)
+        self.wire_height(flown, commanded_m, dt_s, held, [0.0; 2])
     }
 
     /// Where a mission flight bound for `target_m` goes this tick, from
@@ -182,13 +208,14 @@ impl WireGovernor {
     /// surface ahead asks for, reached at the set rate, and whether it must
     /// wait where it is because the step itself crosses something it is not
     /// yet above.
-    fn surface_step(
+    fn surface_step_within(
         &self,
         flown: Governed,
         commanded_m: [f64; 3],
         wire_z: f64,
         target_m: [f64; 2],
         dt_s: f64,
+        margin_m: [f64; 2],
     ) -> ([f64; 3], bool) {
         let surface = self.surface.as_ref().expect("only called with a surface");
         let map = self.map.current();
@@ -202,17 +229,18 @@ impl WireGovernor {
         };
         let to_target = (target_m[0] - fx).hypot(target_m[1] - fy);
         let approaching = to_target <= surface.approach_radius_m;
+        let [beside_m, above_m] = margin_m;
         let reach_z = surface.climb_mps * dt_s;
         // What the surface asks of a segment from where the platform is.
         let needed = |length_m: f64| -> Option<f64> {
             let to = [fx + direction[0] * length_m, fy + direction[1] * length_m];
             let top = if approaching {
                 // Coming down to the target: only structures on the way in.
-                map.surface_top_along([fx, fy], to, 0.0, false, Some(target_m))
+                map.surface_top_along([fx, fy], to, beside_m, false, Some(target_m))
             } else {
-                map.surface_top_along([fx, fy], to, surface.corridor_m, true, None)
+                map.surface_top_along([fx, fy], to, surface.corridor_m + beside_m, true, None)
             };
-            top.map(|top| top + surface.clearance_m)
+            top.map(|top| top + surface.clearance_m + above_m)
         };
         let reach = if approaching {
             step
@@ -248,11 +276,24 @@ impl WireGovernor {
         }
     }
 
+    #[cfg(test)]
+    fn surface_step(
+        &self,
+        flown: Governed,
+        commanded_m: [f64; 3],
+        wire_z: f64,
+        target_m: [f64; 2],
+        dt_s: f64,
+    ) -> ([f64; 3], bool) {
+        self.surface_step_within(flown, commanded_m, wire_z, target_m, dt_s, [0.0; 2])
+    }
+
     /// One step of a flight back to a platform's own path at `path_m`,
     /// from `from_m` toward `commanded_m`, kept above the believed surface
     /// as a mission flight is: the step itself when nothing is in the way.
     pub fn rejoin_step(
         &self,
+        node_id: &str,
         from_m: [f64; 3],
         commanded_m: [f64; 3],
         path_m: [f64; 2],
@@ -268,8 +309,15 @@ impl WireGovernor {
             handed_over: false,
             braking_step_m: None,
         };
-        self.surface_step(flown, commanded_m, commanded_m[2], path_m, dt_s)
-            .0
+        self.surface_step_within(
+            flown,
+            commanded_m,
+            commanded_m[2],
+            path_m,
+            dt_s,
+            self.margin_m(node_id),
+        )
+        .0
     }
 
     /// Govern every mobile platform for this tick. `missions` names the
@@ -312,13 +360,14 @@ impl WireGovernor {
                 braking_step_m: None,
             });
             let held = self.held.contains(&node_id);
-            let wire_z = self.wire_height(flown, commanded_m, dt_s, held);
+            let margin_m = self.margin_m(&node_id);
+            let wire_z = self.wire_height(flown, commanded_m, dt_s, held, margin_m);
             let mut position = [commanded_m[0], commanded_m[1], wire_z];
             let mission = missions.get(&node_id).filter(|_| self.surface.is_some());
             let mut climb_to_m = flown.climb_to_m.filter(|_| mission.is_some());
             if let Some(target_m) = mission {
                 let (stepped, wait) =
-                    self.surface_step(flown, commanded_m, wire_z, *target_m, dt_s);
+                    self.surface_step_within(flown, commanded_m, wire_z, *target_m, dt_s, margin_m);
                 position = stepped;
                 if wait {
                     waited.push(node_id.clone());
@@ -378,9 +427,9 @@ impl WireGovernor {
                     // Swept: a mission flight never ends a tick beyond a
                     // wall it flew at.
                     if guard
-                        .first_structure_hit(flown.position_m, position)
+                        .first_structure_hit(&node_id, flown.position_m, position)
                         .is_some()
-                        || guard.violates(position)
+                        || guard.violates(&node_id, position)
                     {
                         position =
                             guard.enforce_from(&node_id, timestamp_s, flown.position_m, position);
@@ -393,7 +442,7 @@ impl WireGovernor {
                             waited.push(node_id.clone());
                         }
                     }
-                } else if guard.violates(position) {
+                } else if guard.violates(&node_id, position) {
                     position = guard.enforce(&node_id, timestamp_s, position);
                 }
             }
@@ -546,6 +595,7 @@ mod tests {
                 pod: None,
                 wire_points: Vec::new(),
                 wire_lines: Vec::new(),
+                pose: None,
             },
             1,
         );
@@ -642,6 +692,47 @@ mod tests {
             5.0 + 15.0 * 0.25,
             "climbing toward {stand_in} m"
         );
+    }
+
+    /// The less well an aircraft knows where it is, the wider and higher it
+    /// keeps clear: a structure well beside the way is flown over by one lost
+    /// sideways, and everything by more by one lost in height.
+    #[test]
+    fn a_lost_flight_keeps_clear_by_how_lost_it_is() {
+        let governor = surface_governor();
+        // Along y = 30: the 30 m structure at (105, 5) is 25 m to the side.
+        let step = |margin_m: [f64; 2], z: f64| {
+            governor
+                .surface_step_within(at(80.0, 30.0, z), [87.0, 30.0, z], z, FAR, 0.25, margin_m)
+                .0[2]
+        };
+        assert_eq!(step([0.0, 0.0], 20.0), 20.0, "known: passed beside");
+        assert_eq!(step([30.0, 0.0], 20.0), 23.75, "lost sideways: climbing");
+        assert_eq!(step([0.0, 20.0], 20.0), 23.75, "lost in height: climbing");
+        assert_eq!(step([30.0, 0.0], 45.0), 45.0, "already over it");
+    }
+
+    /// A wire beside the way is cleared by an aircraft that may be under it.
+    #[test]
+    fn a_lost_flight_keeps_clear_of_a_wire_beside_it() {
+        let governor = governor();
+        // Along y, 40 m east of the wire along x = 0 at 100 m, just over it.
+        let along = |margin_m: [f64; 2]| {
+            governor.wire_height(
+                flown(40.0, 104.0),
+                [40.0, 5.0, 104.0],
+                0.25,
+                false,
+                margin_m,
+            )
+        };
+        assert_eq!(along([0.0, 0.0]), 104.0, "known: the wire is beside it");
+        assert!(along([40.0, 0.0]) > 104.0, "lost: it may be over the wire");
+        // Margins are how well it knows, whoever it is.
+        let unsure = crate::navigation::FlownPositions::always_unsure("d", [100.0, 1.0]);
+        let governor = governor.with_flown_positions(Some(unsure));
+        assert_eq!(governor.margin_m("d"), [40.0, 2.0], "bounded");
+        assert_eq!(governor.margin_m("e"), [0.0, 0.0]);
     }
 
     /// Within the approach radius a flight comes down to its target: the

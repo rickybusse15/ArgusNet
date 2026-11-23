@@ -638,7 +638,7 @@ fn guarded_step(
     to: [f64; 3],
 ) -> [f64; 3] {
     let length = distance_3d(from, to);
-    match guard.first_structure_hit(from, to) {
+    match guard.first_structure_hit(node_id, from, to) {
         Some(t) if length > 0.0 => {
             let f = ((t * length - REJOIN_STANDOFF_M) / length).max(0.0);
             let stop = [
@@ -668,11 +668,11 @@ fn guarded_to(
     // ground at once: stopping it there held the aircraft for good. It is
     // swept from a clearance higher instead, so it can climb away, and a
     // ridge further along still stops it.
-    let start = match guard.first_ground_contact(from, to) {
+    let start = match guard.first_ground_contact(node_id, from, to) {
         Some(t) if t <= 0.0 => [from[0], from[1], from[2] + guard.clearance_m()],
         _ => from,
     };
-    let stop = match guard.first_ground_contact(start, to) {
+    let stop = match guard.first_ground_contact(node_id, start, to) {
         Some(t) => {
             let stop = [
                 start[0] + (to[0] - start[0]) * t,
@@ -818,8 +818,8 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
                 + (path[2] - last[2]) * away[2])
                 / context.dt_s;
             let clear = shared.guard.as_ref().is_none_or(|guard| {
-                guard.first_structure_hit(*at, path).is_none()
-                    && guard.first_ground_contact(*at, path).is_none()
+                guard.first_structure_hit(node_id, *at, path).is_none()
+                    && guard.first_ground_contact(node_id, *at, path).is_none()
                     && shared
                         .lines
                         .iter()
@@ -854,7 +854,7 @@ fn rejoin(shared: &mut State, context: &mut TickContext<'_>) -> usize {
         };
         if let (false, true, Some(governor)) = (last_step, governed, shared.governor.as_ref()) {
             // Over what the map believes is there, as a mission flight is.
-            next = governor.rejoin_step(*at, next, [path[0], path[1]], context.dt_s);
+            next = governor.rejoin_step(node_id, *at, next, [path[0], path[1]], context.dt_s);
         }
         if let Some(guard) = &shared.guard {
             let tentative = next;
@@ -1209,7 +1209,7 @@ impl MissionOverrideStage {
                     guard.forget(&node_id, timestamp_s);
                 }
                 let position = match shared.guard.as_ref() {
-                    Some(guard) if !governed && guard.violates(position) => {
+                    Some(guard) if !governed && guard.violates(&node_id, position) => {
                         if let Some(governor) = shared.governor.as_mut() {
                             governor.held_by_guard(&node_id);
                         }

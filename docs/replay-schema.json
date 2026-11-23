@@ -1029,9 +1029,27 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "enum": ["sensor_outage", "link_delay", "source_restart", "calibration_drift", "mapping_outage", "nav_camera_outage", "gimbal_jam"]
+                "enum": ["sensor_outage", "link_delay", "source_restart", "calibration_drift", "mapping_outage", "nav_camera_outage", "gimbal_jam", "gnss_outage"]
               },
               "node_id": {"type": "string"}
+            }
+          }
+        },
+        "navigation": {
+          "type": "array",
+          "description": "Where each aircraft's navigation has it this tick and how well it knows (one sigma): what its returns were placed by. The truth is in nodes. Absent in a run that places returns by the true pose.",
+          "items": {
+            "type": "object",
+            "required": ["node_id", "position_m", "velocity_mps", "heading_rad", "vertical_sigma_m", "horizontal_sigma_m", "heading_sigma_rad", "fix_age_s"],
+            "properties": {
+              "node_id": {"type": "string"},
+              "position_m": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "velocity_mps": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+              "heading_rad": {"type": "number"},
+              "vertical_sigma_m": {"type": "number"},
+              "horizontal_sigma_m": {"type": "number"},
+              "heading_sigma_rad": {"type": "number"},
+              "fix_age_s": {"type": "number"}
             }
           }
         },

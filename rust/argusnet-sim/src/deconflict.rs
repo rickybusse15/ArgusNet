@@ -242,6 +242,8 @@ pub struct DeconflictStage {
     /// world: a resolved position inside the ground or a structure is put
     /// back and recorded. `None` (every prior run) changes nothing.
     guard: Option<crate::belief_world::PhysicalGuard>,
+    /// How much wider aircraft keep apart for not knowing where they are.
+    flown: Option<crate::navigation::FlownPositions>,
     /// The power lines a yielder is never pushed into the clearance of
     /// (R3), when its planner knows them. Empty (the reference, and a run
     /// without a prior map that has mapped none) changes nothing.
@@ -384,6 +386,7 @@ impl DeconflictStage {
             state: State::default(),
             resolver,
             guard: None,
+            flown: None,
             power_lines: Vec::new(),
             mapped: None,
             mapped_seen: None,
@@ -422,6 +425,21 @@ impl DeconflictStage {
         &self.power_lines
     }
 
+    /// Keep aircraft further apart the less well they know where they are.
+    pub fn set_flown_positions(&mut self, flown: crate::navigation::FlownPositions) {
+        self.flown = Some(flown);
+    }
+
+    /// What `a` and `b` not knowing quite where they are adds to the distance
+    /// they keep apart, `[horizontal, vertical]` metres.
+    fn margin_m(&self, a: &str, b: &str) -> [f64; 2] {
+        let Some(flown) = &self.flown else {
+            return [0.0; 2];
+        };
+        let (a, b) = (flown.margin_m(a), flown.margin_m(b));
+        std::array::from_fn(|k| a[k].hypot(b[k]))
+    }
+
     /// Keep resolved positions out of the true ground and structures.
     pub fn set_physical_guard(&mut self, guard: crate::belief_world::PhysicalGuard) {
         self.guard = Some(guard);
@@ -445,7 +463,7 @@ impl DeconflictStage {
     /// asked to go for another's sake: the wires believed ahead, and never
     /// past where it was proposed (a governor part way over a wire is not
     /// asked to be there already).
-    fn wire_limits(&self, at: [f64; 3], velocity: [f64; 3]) -> (f64, f64) {
+    fn wire_limits(&self, at: [f64; 3], velocity: [f64; 3], unsure_m: [f64; 2]) -> (f64, f64) {
         let Some(SeparationWires { config, map }) = &self.wires else {
             return (f64::NEG_INFINITY, f64::INFINITY);
         };
@@ -456,12 +474,13 @@ impl DeconflictStage {
             [0.0, 0.0]
         };
         let reach = (speed * config.lookahead_s).max(config.min_reach_m);
-        let bounds = map.current().hazard_bounds_ahead(
+        let bounds = map.current().hazard_bounds_within(
             [at[0], at[1]],
             direction,
             reach,
             at[2],
             config.clearance_m,
+            unsure_m,
         );
         (
             bounds.floor_m.map_or(f64::NEG_INFINITY, |z| z.min(at[2])),
@@ -728,7 +747,8 @@ impl DeconflictStage {
             for &j in &order[rank + 1..] {
                 let (a, b) = (&proposed[i], &proposed[j]);
                 let separation = closest_in_plan(a.1, a.2, b.1, b.2, config.look_ahead_s);
-                if separation < config.min_separation_m {
+                let margin = self.margin_m(&a.0, &b.0);
+                if separation < config.min_separation_m + margin[0] {
                     conflicts.push((i, j, separation));
                 }
             }
@@ -743,7 +763,10 @@ impl DeconflictStage {
         };
         let limits: Vec<(f64, f64)> = proposed
             .iter()
-            .map(|(_, at, velocity)| self.wire_limits(*at, *velocity))
+            .map(|(id, at, velocity)| {
+                let unsure = self.flown.as_ref().map_or([0.0; 2], |f| f.margin_m(id));
+                self.wire_limits(*at, *velocity, unsure)
+            })
             .collect();
         let mut reported = std::collections::BTreeSet::new();
         for _ in 0..=proposed.len() {
@@ -754,7 +777,8 @@ impl DeconflictStage {
                     yielder(&a.0, &roles.role_of(&a.0), &b.0, &roles.role_of(&b.0));
                 let (y, p) = if yielding == a.0 { (i, j) } else { (j, i) };
                 let above = height(&wanted, y) - height(&wanted, p);
-                if above.abs() >= config.vertical_separation_m - 1e-9 {
+                let apart_m = config.vertical_separation_m + self.margin_m(&a.0, &b.0)[1];
+                if above.abs() >= apart_m - 1e-9 {
                     continue;
                 }
                 // The way it has started: flown in from an earlier tick, or
@@ -775,8 +799,7 @@ impl DeconflictStage {
                     None if above >= 0.0 => 1.0,
                     None => -1.0,
                 };
-                let target =
-                    |direction: f64| height(&wanted, p) + direction * config.vertical_separation_m;
+                let target = |direction: f64| height(&wanted, p) + direction * apart_m;
                 let at = proposed[y].1;
                 if direction < 0.0
                     && roles
@@ -791,8 +814,7 @@ impl DeconflictStage {
                     // A wire leaves the yielder no more room: its peer goes
                     // the other way, as far as its own wires allow.
                     let at = proposed[p].1;
-                    let away = (reached - direction * config.vertical_separation_m)
-                        .clamp(limits[p].0, limits[p].1);
+                    let away = (reached - direction * apart_m).clamp(limits[p].0, limits[p].1);
                     // Nor lower over the ground than a yielder may be sent;
                     // one already lower is not sent down at all.
                     let away = if away < at[2] {
@@ -826,7 +848,8 @@ impl DeconflictStage {
             .iter()
             .filter_map(|&(i, j, _)| {
                 let apart = (height(&wanted, i) - height(&wanted, j)).abs();
-                (apart < config.vertical_separation_m - 1e-9).then(|| Shortfall {
+                let margin = self.margin_m(&proposed[i].0, &proposed[j].0);
+                (apart < config.vertical_separation_m + margin[1] - 1e-9).then(|| Shortfall {
                     pair: [proposed[i].0.clone(), proposed[j].0.clone()],
                     apart_m: apart,
                 })
@@ -1987,25 +2010,65 @@ mod tests {
         let mut stage = DeconflictStage::new();
         let east = [10.0, 0.0, 0.0];
         assert_eq!(
-            stage.wire_limits([-20.0, 0.0, 62.0], east),
+            stage.wire_limits([-20.0, 0.0, 62.0], east, [0.0; 2]),
             (f64::NEG_INFINITY, f64::INFINITY)
         );
         stage.set_separation_wires(Some(SeparationWires {
             config: crate::belief_world::WirePlanningConfig::default(),
             map: wire_map(),
         }));
-        let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 62.0], east);
+        let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 62.0], east, [0.0; 2]);
         assert!((56.0..62.0).contains(&floor), "{floor}");
         assert_eq!(ceiling, f64::INFINITY);
         // Part way up: not asked to be over it already.
-        let (floor, _) = stage.wire_limits([-20.0, 0.0, 50.0], east);
+        let (floor, _) = stage.wire_limits([-20.0, 0.0, 50.0], east, [0.0; 2]);
         assert_eq!(floor, 50.0);
-        let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 20.0], east);
+        let (floor, ceiling) = stage.wire_limits([-20.0, 0.0, 20.0], east, [0.0; 2]);
         assert_eq!(floor, f64::NEG_INFINITY);
         assert!((20.0..=36.0).contains(&ceiling), "{ceiling}");
+        // One that may be 20 m aside and 3 m off in height keeps that much
+        // more; one past the wire by less than that is still at it.
+        let (wide, _) = stage.wire_limits([-20.0, 0.0, 80.0], east, [0.0, 3.0]);
+        let (narrow, _) = stage.wire_limits([-20.0, 0.0, 80.0], east, [0.0; 2]);
+        assert!((wide - narrow - 3.0).abs() < 1e-9, "{wide} over {narrow}");
+        let north = [0.0, 10.0, 0.0];
+        let beside = [-40.0, 0.0, 62.0];
+        let sure = stage.wire_limits(beside, north, [0.0; 2]).0;
+        let unsure = stage.wire_limits(beside, north, [40.0, 0.0]).0;
+        assert!(unsure > sure, "{unsure} over {sure}");
         assert_eq!(
-            stage.wire_limits([-300.0, 0.0, 62.0], [-10.0, 0.0, 0.0]),
+            stage.wire_limits([-300.0, 0.0, 62.0], [-10.0, 0.0, 0.0], [0.0; 2]),
             (f64::NEG_INFINITY, f64::INFINITY)
         );
+    }
+
+    /// Aircraft that do not know where they are keep further apart: a pair
+    /// clear of each other if both know is not if one may be anywhere near.
+    #[test]
+    fn a_lost_drone_is_kept_further_from() {
+        use crate::navigation::FlownPositions;
+        let proposed: Vec<(String, [f64; 3], [f64; 3])> = [("a", 0.0), ("b", 30.0)]
+            .into_iter()
+            .map(|(id, x)| (id.to_string(), [x, 0.0, 100.0], [0.0; 3]))
+            .collect();
+        let events = |unsure: Option<FlownPositions>| {
+            let mut stage = DeconflictStage::new();
+            stage.set_offset_ramp(Some(RAMP));
+            if let Some(flown) = unsure {
+                stage.set_flown_positions(flown);
+            }
+            let none = std::collections::BTreeMap::new();
+            let (wanted, events, _) = stage.vertical_separation(&proposed, &none, 0.0);
+            let moved = wanted.values().map(|o| o[2].abs()).fold(0.0f64, f64::max);
+            (events.len(), moved)
+        };
+        let vertical = DeconflictStage::new().config().vertical_separation_m;
+        assert_eq!(events(None).0, 0);
+        let known = FlownPositions::always_unsure("a", [0.02, 0.02]);
+        assert_eq!(events(Some(known)).0, 0);
+        let lost = FlownPositions::always_unsure("a", [15.0, 3.0]);
+        let (conflicts, moved) = events(Some(lost));
+        assert_eq!(conflicts, 1);
+        assert!((moved - (vertical + 6.0)).abs() < 1e-9, "{moved}");
     }
 }
