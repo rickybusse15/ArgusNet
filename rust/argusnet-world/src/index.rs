@@ -1,6 +1,7 @@
 //! Deterministic tile index shared by collision and visibility queries.
 use crate::obstacles::{Bounds2d, Obstacle};
-use std::collections::{BTreeMap, BTreeSet};
+use crate::ray_index::RayIndex;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct ObstacleLayer {
@@ -8,6 +9,7 @@ pub struct ObstacleLayer {
     pub tile_size_m: f64,
     pub primitives: Vec<Obstacle>,
     tiles: BTreeMap<(i64, i64), Vec<usize>>,
+    rays: RayIndex,
 }
 impl ObstacleLayer {
     pub fn new(
@@ -27,7 +29,9 @@ impl ObstacleLayer {
             tile_size_m,
             primitives,
             tiles: BTreeMap::new(),
+            rays: RayIndex::default(),
         };
+        layer.rays = RayIndex::new(&layer.primitives);
         for i in 0..layer.primitives.len() {
             let (x0, x1, y0, y1) = layer.tile_range(layer.primitives[i].bounds_xy_m());
             for y in y0..=y1 {
@@ -45,7 +49,7 @@ impl ObstacleLayer {
     }
     pub fn query(&self, b: Bounds2d) -> Vec<&Obstacle> {
         let (x0, x1, y0, y1) = self.tile_range(b);
-        let mut ids = BTreeSet::new();
+        let mut ids: Vec<usize> = Vec::new();
         for y in y0..=y1 {
             for x in x0..=x1 {
                 if let Some(v) = self.tiles.get(&(x, y)) {
@@ -53,9 +57,18 @@ impl ObstacleLayer {
                 }
             }
         }
-        ids.into_iter()
-            .map(|i: &usize| &self.primitives[*i])
-            .collect()
+        // An obstacle is listed in every tile it overlaps.
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter().map(|i| &self.primitives[i]).collect()
+    }
+    /// The first hard obstacle the segment meets, and where along it
+    /// (0 at `from`, 1 at `to`). Of obstacles met at the same place, the
+    /// first in `primitives`.
+    pub fn first_hard_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<(&Obstacle, f64)> {
+        self.rays
+            .first_hit(&self.primitives, from, to, &mut 0)
+            .map(|(i, t)| (&self.primitives[i], t))
     }
     pub fn point_collides(&self, p: [f64; 3]) -> Option<&Obstacle> {
         self.query(Bounds2d::new(p[0], p[0], p[1], p[1]).expanded(1e-6))

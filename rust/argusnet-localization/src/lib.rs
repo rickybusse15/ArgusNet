@@ -438,6 +438,7 @@ impl GridLocalizer {
     }
 }
 
+pub mod nav;
 pub mod vio;
 
 pub use vio::{rotvec_to_matrix, ImuMeasurement, VioNoise, VioPredictor};

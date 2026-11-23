@@ -658,6 +658,7 @@ mod tests {
                 pod: None,
                 wire_points: Vec::new(),
                 wire_lines: Vec::new(),
+                pose: None,
             },
             1,
         );

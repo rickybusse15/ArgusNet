@@ -94,6 +94,21 @@
   three each failed one gate on how drones were kept apart; the fourth
   passed on sensing later found to put the pod's ground 0.7 m low.
   One site, assumed sensor models.
+- Navigation: the estimator in the loop. `--navigation {rtk,standalone,FILE}`
+  places what each aircraft senses by a pose estimated from its own IMU, GNSS
+  and heading, in place of its true one, and the map's quality counts how well
+  that pose was known. An uncorrected receiver now meets none of a 0.5 m
+  requirement that the map used to say was 0.91 met. `gnss_outage` (F2) takes
+  the fixes away. Aircraft fly their estimate, so the true path is off by its
+  error; clearances widen by it, and captures placed worse than half a cell are
+  refused. Off, nothing changes.
+  See `docs/migration/NAVIGATION.md`.
+- Ray index. What a sensor's ray meets first is found by walking a
+  bounding-volume tree over the buildings, in place of testing every one in
+  the ray's bounding box. A 600 s `field_v2` mission on West Pleasant View
+  takes 54 × 10⁹ instructions in place of 1,469 × 10⁹ (about 2.5 s in place
+  of 57 s), and its replay is byte-identical. See
+  `docs/performance/ray-index-2026-11-22.md`.
 - Terrain returns are on the ray (no-prior sensing only). The terrain
   intersection answered with the middle of the first cell crossed under the
   ground, lifted onto it: on the ground, off the ray. The pod LiDAR reports

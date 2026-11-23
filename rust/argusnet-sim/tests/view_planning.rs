@@ -31,6 +31,7 @@ fn requirement() -> QualityRequirement {
         max_vertical_sigma_m: Some(0.5),
         max_age_s: None,
         max_image_gsd_m: None,
+        max_horizontal_sigma_m: None,
         max_incidence_deg: 40.0,
         bias_floor_m: 0.05,
     }

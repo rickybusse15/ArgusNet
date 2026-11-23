@@ -540,6 +540,9 @@ impl MappingStage {
                 );
             }
         }
+        if config.navigation.is_some() {
+            grid.track_poses();
+        }
         if let Some(tracker) = &config.wire_tracker {
             grid.track_wires(tracker.clone());
         }
@@ -2192,6 +2195,7 @@ mod tests {
             pod: None,
             wire_points: Vec::new(),
             wire_lines: Vec::new(),
+            pose: None,
         };
         map(sim).submit_range_scans(vec![scan]);
     }

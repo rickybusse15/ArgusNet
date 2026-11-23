@@ -85,6 +85,9 @@ pub struct Achieved {
     /// Over cells with accepted returns.
     pub density_per_m2: Option<Spread>,
     pub vertical_sigma_m: Option<Spread>,
+    /// Over cells placed by an estimated pose; absent without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizontal_sigma_m: Option<Spread>,
     /// Over imaged cells; absent without an image requirement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_gsd_m: Option<Spread>,
@@ -229,6 +232,12 @@ pub fn build(input: ReportInput<'_>) -> MapReport {
         met_fraction: counts.met_fraction(),
         density_per_m2: density,
         vertical_sigma_m: Spread::of(accepted.iter().map(|&k| sigma(k)).collect()),
+        horizontal_sigma_m: Spread::of(
+            quality
+                .iter()
+                .filter_map(|cell| cell.horizontal_sigma_m)
+                .collect(),
+        ),
         image_gsd_m: Spread::of(
             input
                 .evidence
@@ -408,6 +417,7 @@ mod tests {
             max_vertical_sigma_m: None,
             max_age_s: None,
             max_image_gsd_m: None,
+            max_horizontal_sigma_m: None,
             max_incidence_deg: 40.0,
             bias_floor_m: 0.0,
         }
@@ -424,6 +434,7 @@ mod tests {
             image_gsd_m: None,
             plane: None,
             relief_m2: 0.0,
+            pose: None,
         }
     }
 

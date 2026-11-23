@@ -817,6 +817,10 @@ pub struct AssembledRun {
     faults_need_camera: bool,
     /// Whether it jams a gimbal, which needs a declared rig's pod.
     faults_need_pod: bool,
+    /// Whether the fault schedule takes GNSS out, which needs navigation.
+    faults_need_navigation: bool,
+    /// The scenario's seed, for noise of the run's own.
+    seed: u32,
     /// The hover height each POI declares (`blind_setup`), by id.
     poi_hover_agl_m: BTreeMap<String, f64>,
     /// Scheduled sensor and link faults (F2), applied before every tick.
@@ -1065,6 +1069,7 @@ fn belief_stats(
         quality: None,
         unsettled_scans: grid.unsettled_scans(),
         stowed_scans: grid.stowed_scans(),
+        misplaced_scans: grid.misplaced_scans(),
         wire_points: grid.wire_points(),
         wire_hazard_cells: 0,
         wire_lines: grid.wire_lines_seen(),
@@ -1434,6 +1439,8 @@ pub fn assemble_with(
         faults_need_mapping: false,
         faults_need_camera: false,
         faults_need_pod: false,
+        faults_need_navigation: false,
+        seed: bundle.seed,
         poi_hover_agl_m: bundle
             .mission
             .iter()
@@ -2107,6 +2114,18 @@ impl AssembledRun {
             config.contact_clearance_m,
         )
         .with_power_lines(&self.world.power_lines);
+        let navigation = config
+            .navigation
+            .clone()
+            .map(|navigation| crate::navigation::Navigation::new(navigation, self.seed))
+            .transpose()?;
+        let flown_positions = navigation
+            .as_ref()
+            .map(crate::navigation::Navigation::flown_positions);
+        let guard = match &flown_positions {
+            Some(flown) => guard.with_flown_positions(flown.clone()),
+            None => guard,
+        };
 
         let controllers = self
             .sim
@@ -2282,6 +2301,9 @@ impl AssembledRun {
             .with_terrain(Arc::new(terrain.clone()));
         deconflict.set_roles(roles);
         deconflict.set_physical_guard(guard.clone());
+        if let Some(flown) = &flown_positions {
+            deconflict.set_flown_positions(flown.clone());
+        }
         if let Some(flights) = &mission_flights {
             let mut config = deconflict.config();
             config.look_ahead_s = flights.separation_look_ahead_s;
@@ -2315,6 +2337,9 @@ impl AssembledRun {
             summary["mapping_agl_cap_m"] = serde_json::json!(agl_cap_m);
             self.observe_mut().set_pod(pod);
         }
+        if let Some(navigation) = navigation {
+            self.observe_mut().set_navigation(navigation);
+        }
         self.sim
             .connect(crate::simulation::Handoff::RangeScansToMapping)
             .map_err(|error| format!("{error:?}"))?;
@@ -2344,6 +2369,7 @@ impl AssembledRun {
                     )
                     .with_hold_braking(camera_braking_mps2)
                     .with_blind_speed(blind_speed_mps)
+                    .with_flown_positions(flown_positions.clone())
                 }),
             );
         }
@@ -2364,6 +2390,13 @@ impl AssembledRun {
         }
         if self.faults_need_pod && self.observe().pod().is_none() {
             return Err("gimbal_jam needs a declared rig, whose pod has a gimbal".into());
+        }
+        if self.faults_need_navigation && self.observe().navigation().is_none() {
+            return Err(
+                "gnss_outage needs a run that estimates its poses (navigation): without it \
+                 nothing uses GNSS"
+                    .into(),
+            );
         }
         if self.faults_need_camera {
             let camera = self.observe().nav_camera().is_some();
@@ -2433,6 +2466,7 @@ impl AssembledRun {
         self.faults_need_mapping = schedule.has_mapping_outages();
         self.faults_need_camera = schedule.has_camera_outages();
         self.faults_need_pod = schedule.has_gimbal_jams();
+        self.faults_need_navigation = schedule.has_gnss_outages();
         self.replay.extend_meta([(
             "fault_manifest".to_string(),
             serde_json::to_value(schedule.manifest()).expect("manifest serialises"),
@@ -2459,6 +2493,7 @@ impl AssembledRun {
         let mapping_out = schedule.mapping_out(tick);
         let camera_out = schedule.camera_out(tick);
         let gimbal_jammed = schedule.gimbal_jammed(tick);
+        let gnss_out = schedule.gnss_out(tick);
         if let Some(overrides) = self
             .sim
             .stage_mut::<crate::overrides::MissionOverrideStage>(Stage::ApplyMissionOverrides)
@@ -2487,6 +2522,7 @@ impl AssembledRun {
         observe.set_mapping_out(mapping_out);
         observe.set_camera_out(camera_out);
         observe.set_gimbal_jammed(gimbal_jammed);
+        observe.set_gnss_out(gnss_out);
         for (node, offset) in offsets {
             observe.set_bias_offset(&node, offset);
         }
@@ -2685,9 +2721,24 @@ impl AssembledRun {
         let frame = self.fusion().frame().ok_or_else(|| {
             RunError::Invariant(format!("stage 7 produced no frame at t={timestamp_s}"))
         })?;
+        // The run has each aircraft where it believes it is; the replay says
+        // where it is, with the estimate beside it.
+        let mut flown = None;
+        if let Some(navigation) = self.observe().navigation() {
+            if navigation.flies_estimates() {
+                let mut platforms = snapshot.platforms.clone();
+                for platform in &mut platforms {
+                    if let Some([x, y, z]) = navigation.true_position_m(&platform.node_id) {
+                        platform.position = argusnet_types::Vector3::new(x, y, z);
+                    }
+                }
+                flown = Some(platforms);
+            }
+        }
+        let platforms = flown.as_ref().unwrap_or(&snapshot.platforms);
         let mut replay_frame = ReplayWriter::frame(
             timestamp_s,
-            &snapshot.platforms,
+            platforms,
             &frame.observations,
             &frame.rejected_observations,
             &frame.tracks,
@@ -2705,7 +2756,7 @@ impl AssembledRun {
             .iter()
             .map(crate::replay::ReplaySafetyEvent::from)
             .collect();
-        self.enrich(&mut replay_frame, timestamp_s, &snapshot.platforms, &truths);
+        self.enrich(&mut replay_frame, timestamp_s, platforms, &truths);
         if let Some(schedule) = &self.faults {
             let tick = (timestamp_s / self.dt_s).round() as u64;
             replay_frame.active_faults = schedule
@@ -2891,6 +2942,9 @@ impl AssembledRun {
             })
             .collect();
 
+        if let Some(navigation) = self.observe().navigation() {
+            frame.navigation = navigation.estimates();
+        }
         if let Some(guard) = &self.guard {
             frame.world_contacts = guard.take_contacts();
         }

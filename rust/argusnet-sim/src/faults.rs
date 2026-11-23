@@ -31,6 +31,9 @@
 //!   counts while the boresight is within
 //!   [`crate::pod::JAMMED_MAX_OFF_NADIR_DEG`] of nadir, and is refused (a
 //!   gap, counted as unsettled) past it. Needs a declared rig.
+//! - **`gnss_outage`**: an aircraft gets no GNSS fix over `[start_s,
+//!   end_s)`. Its navigation goes on from its IMU and heading, and says how
+//!   much less it knows ([`crate::navigation`]). Needs navigation.
 //!
 //! Outages, delays and drift offsets are a pure function of the tick and are re-applied
 //! idempotently before every tick, so a checkpoint needs no extra state to
@@ -85,6 +88,11 @@ pub enum Fault {
         start_s: f64,
         end_s: f64,
     },
+    GnssOutage {
+        node_id: String,
+        start_s: f64,
+        end_s: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +139,8 @@ pub struct FaultSchedule {
     camera_outages: Vec<(String, u64, u64)>,
     /// `(node, start tick, end tick)`, end exclusive.
     gimbal_jams: Vec<(String, u64, u64)>,
+    /// `(node, start tick, end tick)`, end exclusive.
+    gnss_outages: Vec<(String, u64, u64)>,
 }
 
 impl FaultSchedule {
@@ -176,6 +186,7 @@ impl FaultSchedule {
             mapping_outages: Vec::new(),
             camera_outages: Vec::new(),
             gimbal_jams: Vec::new(),
+            gnss_outages: Vec::new(),
         };
         for fault in &manifest.faults {
             match fault {
@@ -265,6 +276,15 @@ impl FaultSchedule {
                     let (start, end) = interval(node_id, *start_s, *end_s)?;
                     schedule.gimbal_jams.push((node_id.clone(), start, end));
                 }
+                Fault::GnssOutage {
+                    node_id,
+                    start_s,
+                    end_s,
+                } => {
+                    known(node_id)?;
+                    let (start, end) = interval(node_id, *start_s, *end_s)?;
+                    schedule.gnss_outages.push((node_id.clone(), start, end));
+                }
             }
         }
         Ok(schedule)
@@ -301,6 +321,7 @@ impl FaultSchedule {
                 | Fault::MappingOutage { start_s, end_s, .. }
                 | Fault::NavCameraOutage { start_s, end_s, .. }
                 | Fault::GimbalJam { start_s, end_s, .. }
+                | Fault::GnssOutage { start_s, end_s, .. }
                 | Fault::LinkDelay { start_s, end_s, .. }
                 | Fault::CalibrationDrift { start_s, end_s, .. } => within(*start_s, *end_s),
                 Fault::SourceRestart { at_s, .. } => tick_of(*at_s, dt_s) == tick,
@@ -384,6 +405,20 @@ impl FaultSchedule {
     /// The nodes whose gimbal is jammed at `tick`.
     pub fn gimbal_jammed(&self, tick: u64) -> std::collections::BTreeSet<String> {
         self.gimbal_jams
+            .iter()
+            .filter(|(_, start, end)| (*start..*end).contains(&tick))
+            .map(|(node, _, _)| node.clone())
+            .collect()
+    }
+
+    /// Whether the manifest takes GNSS from any aircraft.
+    pub fn has_gnss_outages(&self) -> bool {
+        !self.gnss_outages.is_empty()
+    }
+
+    /// The nodes with no GNSS at `tick`.
+    pub fn gnss_out(&self, tick: u64) -> std::collections::BTreeSet<String> {
+        self.gnss_outages
             .iter()
             .filter(|(_, start, end)| (*start..*end).contains(&tick))
             .map(|(node, _, _)| node.clone())

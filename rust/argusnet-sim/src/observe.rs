@@ -499,6 +499,9 @@ pub struct ObserveStage {
     /// The rig's pod (SR2): its LiDAR scans in place of `range`'s, from a
     /// 3-axis gimbal whose state is part of this stage's checkpoint.
     pod: Option<crate::pod::PodSensing>,
+    /// Where each aircraft's navigation has it, in a run that estimates it:
+    /// what its scans are placed by. Part of this stage's checkpoint.
+    navigation: Option<crate::navigation::Navigation>,
     /// This tick's scans, handed to stage 8.
     scans: Vec<crate::range_scan::RangeScan>,
     /// Sensors that capture at their own rate (P4.10b); `None` is every
@@ -633,6 +636,7 @@ impl ObserveStage {
             range: None,
             nav_camera: None,
             pod: None,
+            navigation: None,
             scans: Vec::new(),
             capture: None,
             bias_offsets: BTreeMap::new(),
@@ -736,6 +740,56 @@ impl ObserveStage {
         }
     }
 
+    /// The stage state without its navigation wrapper, and the navigation's
+    /// own: as [`Self::split_pods`], for a run that estimates its poses.
+    fn split_navigation(
+        &self,
+        state: &serde_json::Value,
+    ) -> Result<
+        (
+            serde_json::Value,
+            Option<crate::navigation::NavigationState>,
+        ),
+        crate::simulation::StageStateError,
+    > {
+        let wrapped = state.get("navigation").is_some() && state.get("observe").is_some();
+        match (&self.navigation, wrapped) {
+            (None, false) => Ok((state.clone(), None)),
+            (Some(_), true) => {
+                let navigation =
+                    serde_json::from_value(state["navigation"].clone()).map_err(|error| {
+                        crate::simulation::StageStateError::Malformed {
+                            detail: format!("the aircraft's navigation: {error}"),
+                        }
+                    })?;
+                Ok((state["observe"].clone(), Some(navigation)))
+            }
+            (Some(_), false) => Err(crate::simulation::StageStateError::Malformed {
+                detail: "this run estimates its poses and the checkpoint has none".into(),
+            }),
+            (None, true) => Err(crate::simulation::StageStateError::Malformed {
+                detail: "the checkpoint estimates its poses and this run does not".into(),
+            }),
+        }
+    }
+
+    /// Estimate each mobile platform's pose, and place what it senses there.
+    pub fn set_navigation(&mut self, navigation: crate::navigation::Navigation) {
+        self.navigation = Some(navigation);
+    }
+
+    /// The platforms' navigation, in a run that estimates their poses.
+    pub fn navigation(&self) -> Option<&crate::navigation::Navigation> {
+        self.navigation.as_ref()
+    }
+
+    /// The platforms with no GNSS from now on (F2's `gnss_outage`).
+    pub fn set_gnss_out(&mut self, nodes: std::collections::BTreeSet<String>) {
+        if let Some(navigation) = self.navigation.as_mut() {
+            navigation.set_gnss_out(nodes);
+        }
+    }
+
     /// Scan with `scanner` from every mobile platform, every tick.
     pub fn set_range_scanner(&mut self, scanner: crate::range_scan::RangeScanner) {
         self.range = Some(scanner);
@@ -788,13 +842,23 @@ impl ObserveStage {
             .filter(|p| p.is_mobile)
             .collect();
         let (tick, timestamp_s) = (context.tick, context.timestamp_s);
+        // Sensing is from where each platform is, which one flying its
+        // estimate is not quite where the run has it.
+        let flown = self
+            .navigation
+            .as_ref()
+            .map(crate::navigation::Navigation::flown_positions);
         let pose = |platform: &argusnet_types::NodeState| {
+            let believed = [
+                platform.position.x,
+                platform.position.y,
+                platform.position.z,
+            ];
             (
-                [
-                    platform.position.x,
-                    platform.position.y,
-                    platform.position.z,
-                ],
+                match &flown {
+                    Some(flown) => flown.truth(&platform.node_id, believed),
+                    None => believed,
+                },
                 [
                     platform.velocity.x,
                     platform.velocity.y,
@@ -818,6 +882,10 @@ impl ObserveStage {
                 scanner.scan(&platform.node_id, tick, timestamp_s, position, velocity)
             }),
         };
+        let attitude_sigma_rad = self
+            .pod
+            .as_ref()
+            .map_or(0.0, |pod| pod.rig().gimbal.attitude_noise_rad);
         // A mapping payload that is out still flew its capture (its gimbal,
         // its clock); nothing it would have returned reaches the map.
         for scan in &mut self.scans {
@@ -841,6 +909,26 @@ impl ObserveStage {
                     .into_iter()
                     .filter(|frame| !camera_out.contains(&frame.node_id)),
             );
+        }
+        // Everything so far is in the true world. From here it is where each
+        // aircraft's own navigation puts it; one with no pose yet has
+        // nowhere to put it.
+        if let Some(navigation) = self.navigation.as_mut() {
+            for platform in &poses {
+                let (position, velocity) = pose(platform);
+                navigation.step(&platform.node_id, tick, timestamp_s, position, velocity);
+            }
+            // From the next tick, off by what this one's estimate is off by.
+            for platform in &poses {
+                navigation.fly(&platform.node_id, context.dt_s);
+            }
+            self.scans.retain_mut(|scan| {
+                let attitude = match scan.pod {
+                    Some(_) => attitude_sigma_rad,
+                    None => 0.0,
+                };
+                navigation.place(scan, attitude)
+            });
         }
     }
 
@@ -1424,6 +1512,9 @@ impl StageHandler for ObserveStage {
         if let Some(pod) = self.pod.as_mut() {
             pod.reset();
         }
+        if let Some(navigation) = self.navigation.as_mut() {
+            navigation.reset();
+        }
         shared.observations.clear();
         shared.records.clear();
         shared.rejections.clear();
@@ -1443,9 +1534,16 @@ impl StageHandler for ObserveStage {
         };
         // A run with a pod wraps the stage's state with its gimbals; every
         // other run checkpoints exactly as before.
-        Some(match &self.pod {
+        let state = match &self.pod {
             None => base,
             Some(pod) => serde_json::json!({ "base": base, "pods": pod.state() }),
+        };
+        Some(match &self.navigation {
+            None => state,
+            Some(navigation) => serde_json::json!({
+                "observe": state,
+                "navigation": navigation.state(),
+            }),
         })
     }
 
@@ -1453,7 +1551,8 @@ impl StageHandler for ObserveStage {
         &self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let (state, _) = self.split_pods(state)?;
+        let (state, _) = self.split_navigation(state)?;
+        let (state, _) = self.split_pods(&state)?;
         let drifts = self.decode_drifts(&state)?;
         let shared = &self.state;
         if !drifts.keys().eq(shared.sensors.keys()) {
@@ -1468,8 +1567,12 @@ impl StageHandler for ObserveStage {
         &mut self,
         state: &serde_json::Value,
     ) -> Result<(), crate::simulation::StageStateError> {
-        let (state, pods) = self.split_pods(state)?;
+        let (state, navigation) = self.split_navigation(state)?;
+        let (state, pods) = self.split_pods(&state)?;
         let drifts = self.decode_drifts(&state)?;
+        if let (Some(mine), Some(saved)) = (self.navigation.as_mut(), navigation) {
+            mine.restore(saved);
+        }
         if let (Some(pod), Some(saved)) = (self.pod.as_mut(), pods) {
             pod.restore(saved);
         }

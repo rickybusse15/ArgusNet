@@ -810,6 +810,7 @@ pub mod noise;
 pub mod numpy_rng;
 pub mod powerline;
 pub mod raster;
+mod ray_index;
 pub mod semantic;
 pub mod terrain_grid;
 pub mod trees;

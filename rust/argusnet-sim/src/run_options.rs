@@ -72,6 +72,7 @@ pub const FIELD_V1_QUALITY: argusnet_mapping::quality::QualityRequirement =
         max_vertical_sigma_m: Some(0.5),
         max_age_s: None,
         max_image_gsd_m: None,
+        max_horizontal_sigma_m: None,
         max_incidence_deg: 40.0,
         bias_floor_m: 0.05,
     };
@@ -237,10 +238,18 @@ impl RunOptions {
     /// link faults are validated against the delivery profile.
     pub fn apply(&self, run: &mut AssembledRun, bundle: &ScenarioBundle) -> Result<(), String> {
         if let Some(profile) = self.profile {
-            run.extend_replay_meta([(
-                "run_profile".to_string(),
-                serde_json::json!({ "id": profile.as_str() }),
-            )]);
+            // Navigation is no profile's: with it, the run is not the profile
+            // and does not say it is.
+            let navigation = self
+                .exploration
+                .as_ref()
+                .is_some_and(|exploration| exploration.navigation.is_some());
+            let id = if navigation {
+                format!("{}+navigation", profile.as_str())
+            } else {
+                profile.as_str().to_string()
+            };
+            run.extend_replay_meta([("run_profile".to_string(), serde_json::json!({ "id": id }))]);
         }
         if let Some(threshold) = self.scan_coverage_threshold {
             run.set_scan_coverage_threshold(threshold)?;

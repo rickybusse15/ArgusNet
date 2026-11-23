@@ -373,6 +373,10 @@ pub struct RangeScan {
     /// Measured camera line detections (W1): directions, no depth, no id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wire_lines: Vec<crate::wire_sensing::WireLine>,
+    /// How well the pose this scan was placed by is known
+    /// ([`crate::navigation`]). Absent when it was placed by the true pose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pose: Option<crate::navigation::PoseQuality>,
 }
 
 /// The scanner: a fan of rays over the true world.
@@ -594,6 +598,7 @@ impl RangeScanner {
             pod: None,
             wire_points: self.measured_points(node_id, tick, origin_m),
             wire_lines: Vec::new(),
+            pose: None,
         }
     }
 }

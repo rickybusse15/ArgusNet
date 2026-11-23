@@ -40,7 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 use argusnet_mapping::quality::{
-    assess, plane_fit, CellEvidence, DeficitCounts, DeficitReason, PlaneMoments, QualityRequirement,
+    assess, plane_fit, pose_weight, CellEvidence, DeficitCounts, DeficitReason, PlaneMoments,
+    PoseEvidence, PosesNow, QualityRequirement,
 };
 use argusnet_mapping::wire_prior::PriorStatus;
 use argusnet_types::Bounds2d;
@@ -154,6 +155,11 @@ pub struct ExplorationConfig {
     /// a rig.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imaging: Option<crate::imaging::ImagingConfig>,
+    /// Estimate where each aircraft is from its own navigation sensors, and
+    /// place what it senses there ([`crate::navigation`]). Absent places
+    /// every return from the true pose, as every run before it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub navigation: Option<crate::navigation::NavigationConfig>,
     /// Measure wires instead of being told them (W1): sensors report noisy
     /// points and camera lines, never a span, and avoidance reads a hazard
     /// band built from the points. Absent is the oracle every run before it
@@ -447,6 +453,7 @@ impl Default for ExplorationConfig {
             view_planning: None,
             imaging: None,
             plane_heights: false,
+            navigation: None,
             map_report: false,
             fault_return: None,
         }
@@ -572,6 +579,15 @@ impl ExplorationConfig {
         {
             return Err("an image requirement needs the imaging model".into());
         }
+        if let Some(navigation) = &self.navigation {
+            navigation.validate()?;
+        } else if self
+            .quality
+            .as_ref()
+            .is_some_and(|quality| quality.max_horizontal_sigma_m.is_some())
+        {
+            return Err("a horizontal requirement needs the navigation to estimate it".into());
+        }
         self.scan.validate()
     }
 }
@@ -682,6 +698,10 @@ pub struct BeliefGrid {
     /// requirement.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     image_gsd_um10: Vec<u32>,
+    /// What the poses its returns were placed by leave uncertain. `None` when
+    /// they are placed by the true pose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    posed: Option<PosedReturns>,
     /// The navigation camera's obstacle evidence (§8.4 of the sensing
     /// guide): per cell, the highest detection (meaningful where any landed)
     /// and its log-odds. Safety evidence only: it never makes a cell
@@ -700,6 +720,10 @@ pub struct BeliefGrid {
     /// or a hold below cruise, when it is not surveying (SR2).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     stowed_scans: u64,
+    /// Captures refused because the aircraft was too lost to say which cell
+    /// its returns were in.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    misplaced_scans: u64,
     /// Measured wire evidence (W1): per cell, how many LiDAR points landed
     /// and the lowest and highest. Empty until the first lands, so a run
     /// without measured wires checkpoints as it always did.
@@ -735,6 +759,99 @@ pub struct BeliefGrid {
     #[serde(skip)]
     views: Option<Views>,
 }
+
+/// What the poses behind the map's returns leave uncertain, by cell.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PosedReturns {
+    /// Over every ground return: its weight, and its weighted height.
+    ground_weight: Vec<f64>,
+    ground_height: Vec<f64>,
+    /// Over accepted ones: weight, weighted height, weighted sigmas.
+    weight: Vec<f64>,
+    height: Vec<f64>,
+    vertical: Vec<f64>,
+    horizontal: Vec<f64>,
+    /// And what a weighted plane takes: weighted squares of the height and
+    /// the sigmas, and squares of the weights.
+    height_sq: Vec<f64>,
+    vertical_sq: Vec<f64>,
+    horizontal_sq: Vec<f64>,
+    weight_sq: Vec<f64>,
+    /// Each aircraft's best-placed accepted return in its newest capture
+    /// with any, and that capture's tick.
+    now: BTreeMap<String, (u64, [f64; 2])>,
+}
+
+/// How long an aircraft's last capture says how well it is placing returns
+/// now, in ticks before the newest of any: one gone home early does not keep
+/// a deficit open.
+const POSE_NOW_TICKS: u64 = 120;
+
+impl PosedReturns {
+    fn new(cells: usize) -> Self {
+        Self {
+            ground_weight: vec![0.0; cells],
+            ground_height: vec![0.0; cells],
+            weight: vec![0.0; cells],
+            height: vec![0.0; cells],
+            vertical: vec![0.0; cells],
+            horizontal: vec![0.0; cells],
+            height_sq: vec![0.0; cells],
+            vertical_sq: vec![0.0; cells],
+            horizontal_sq: vec![0.0; cells],
+            weight_sq: vec![0.0; cells],
+            now: BTreeMap::new(),
+        }
+    }
+
+    fn accept(&mut self, index: usize, height_m: f64, sigmas: [f64; 2]) {
+        let weight = pose_weight(sigmas[0]);
+        self.weight[index] += weight;
+        self.height[index] += weight * height_m;
+        self.vertical[index] += weight * sigmas[0];
+        self.horizontal[index] += weight * sigmas[1];
+        self.height_sq[index] += weight * height_m * height_m;
+        self.vertical_sq[index] += weight * sigmas[0] * sigmas[0];
+        self.horizontal_sq[index] += weight * sigmas[1] * sigmas[1];
+        self.weight_sq[index] += weight * weight;
+    }
+
+    /// Cell `index`'s, all but what its neighbours and the time say.
+    fn evidence(&self, index: usize) -> PoseEvidence {
+        PoseEvidence {
+            weight: self.weight[index],
+            height_m: self.height[index],
+            vertical_sigma_m: self.vertical[index],
+            horizontal_sigma_m: self.horizontal[index],
+            height_sq_m2: self.height_sq[index],
+            vertical_sq_m2: self.vertical_sq[index],
+            horizontal_sq_m2: self.horizontal_sq[index],
+            weight_sq: self.weight_sq[index],
+            slope: 0.0,
+            now: PosesNow::default(),
+        }
+    }
+
+    /// The `[vertical, horizontal]` each aircraft mapping lately places its
+    /// returns by as of `tick`. With none, what the last to map had: once all
+    /// are home, nothing has been learned that would do better.
+    fn poses_now(&self, tick: u64) -> PosesNow {
+        let Some(newest) = self.now.values().map(|(at, _)| *at).max() else {
+            return PosesNow::default();
+        };
+        let since = tick.min(newest).saturating_sub(POSE_NOW_TICKS);
+        PosesNow::of(
+            self.now
+                .values()
+                .filter(|(at, _)| *at >= since)
+                .map(|(_, sigmas)| *sigmas),
+        )
+    }
+}
+
+/// How far apart what is beside a lost aircraft's way is looked at, metres:
+/// within a wire's own clearance.
+const MARGIN_STRIP_M: f64 = 10.0;
 
 /// Cells per side of the blocks the unseen-ground stand-in is computed over.
 const BLOCK_CELLS: usize = 5;
@@ -805,10 +922,12 @@ impl BeliefGrid {
             quality_tick: None,
             image_footprint: None,
             image_gsd_um10: Vec::new(),
+            posed: None,
             safety_top_m: Vec::new(),
             safety_log_odds: Vec::new(),
             unsettled_scans: 0,
             stowed_scans: 0,
+            misplaced_scans: 0,
             wire_count: Vec::new(),
             wire_low_m: Vec::new(),
             wire_high_m: Vec::new(),
@@ -901,10 +1020,14 @@ impl BeliefGrid {
             self.quality_tick = Some(0);
         }
         self.image_gsd_um10.fill(0);
+        if self.posed.is_some() {
+            self.posed = Some(PosedReturns::new(self.cell_count()));
+        }
         self.safety_top_m = Vec::new();
         self.safety_log_odds = Vec::new();
         self.unsettled_scans = 0;
         self.stowed_scans = 0;
+        self.misplaced_scans = 0;
         self.wire_count = Vec::new();
         self.wire_low_m = Vec::new();
         self.wire_high_m = Vec::new();
@@ -932,6 +1055,7 @@ impl BeliefGrid {
         self.accept_incidence_deg == other.accept_incidence_deg
             && self.accepted_plane.is_empty() == other.accepted_plane.is_empty()
             && self.image_footprint == other.image_footprint
+            && self.posed.is_some() == other.posed.is_some()
     }
 
     /// Whether `other` covers the same cells (for a checkpoint's check).
@@ -975,10 +1099,13 @@ impl BeliefGrid {
         if let Some(height) = self.plane_height(index) {
             return height;
         }
-        if self.ground_count[index] > 0 {
-            self.ground_sum[index] / self.ground_count[index] as f64
-        } else {
-            f64::NAN
+        if self.ground_count[index] == 0 {
+            return f64::NAN;
+        }
+        match &self.posed {
+            // Well-placed returns outweigh badly placed ones.
+            Some(posed) => posed.ground_height[index] / posed.ground_weight[index],
+            None => self.ground_sum[index] / self.ground_count[index] as f64,
         }
     }
 
@@ -991,6 +1118,7 @@ impl BeliefGrid {
             accepted_height_sum_m: self.accepted_sum_m[index],
             accepted_height_sq_sum_m2: self.accepted_sq_m2[index],
             plane: Some(plane),
+            pose: self.posed.as_ref().map(|posed| posed.evidence(index)),
             ..CellEvidence::default()
         })
         .map(|fit| fit.height_m)
@@ -1101,6 +1229,39 @@ impl BeliefGrid {
         self.accepted_plane = vec![PlaneMoments::default(); self.cell_count()];
     }
 
+    /// Weigh each return by how well its pose was known, and keep what the
+    /// poses leave uncertain. Before any scan.
+    pub fn track_poses(&mut self) {
+        self.posed = Some(PosedReturns::new(self.cell_count()));
+    }
+
+    /// How steep the ground is in cell `index`, rise over run, from the
+    /// measured cells beside it; level where there are none.
+    fn slope(&self, index: usize) -> f64 {
+        let (i, j) = (index % self.nx, index / self.nx);
+        let along = |low: Option<usize>, high: Option<usize>| {
+            let at = |k: Option<usize>| {
+                let height = k.map_or(f64::NAN, |k| self.ground_value(k));
+                height.is_finite().then_some(height)
+            };
+            let step = self.resolution_m;
+            match (at(low), at(Some(index)), at(high)) {
+                (Some(a), _, Some(b)) => (b - a) / (2.0 * step),
+                (Some(a), Some(b), None) | (None, Some(a), Some(b)) => (b - a) / step,
+                _ => 0.0,
+            }
+        };
+        let x = along(
+            (i > 0).then(|| index - 1),
+            (i + 1 < self.nx).then(|| index + 1),
+        );
+        let y = along(
+            (j > 0).then(|| index - self.nx),
+            (j + 1 < self.ny).then(|| index + self.nx),
+        );
+        x.hypot(y)
+    }
+
     /// Keep each cell's finest image too (SR4). Before any scan.
     pub fn track_images(&mut self, footprint: crate::imaging::ImageFootprint, finest_gsd_m: f64) {
         self.image_footprint = Some((footprint, finest_gsd_m));
@@ -1174,9 +1335,17 @@ impl BeliefGrid {
         self.quality_tick
     }
 
+    /// How well the aircraft mapping as of `tick` place returns.
+    fn poses_now(&self, tick: u64) -> PosesNow {
+        self.posed
+            .as_ref()
+            .map_or_else(PosesNow::default, |posed| posed.poses_now(tick))
+    }
+
     /// Cell `index`'s accepted evidence at tick `now`, ages in seconds at
     /// `dt_s` a tick.
-    fn evidence(&self, index: usize, now: u64, dt_s: f64) -> CellEvidence {
+    /// With [`Self::poses_now`] as of then.
+    fn evidence(&self, index: usize, now: u64, dt_s: f64, poses_now: PosesNow) -> CellEvidence {
         let accepted_returns = self.accepted_count.get(index).copied().unwrap_or(0);
         CellEvidence {
             ground_returns: self.ground_count[index],
@@ -1195,13 +1364,19 @@ impl BeliefGrid {
                 .map(|&gsd| gsd as f64 * 1e-5),
             plane: self.accepted_plane.get(index).copied(),
             relief_m2: self.relief_m2(index),
+            pose: self.posed.as_ref().map(|posed| PoseEvidence {
+                slope: self.slope(index),
+                now: poses_now,
+                ..posed.evidence(index)
+            }),
         }
     }
 
     /// Every cell's evidence at tick `now`, for the map's report.
     pub fn all_evidence(&self, now: u64, dt_s: f64) -> Vec<CellEvidence> {
+        let poses_now = self.poses_now(now);
         (0..self.cell_count())
-            .map(|k| self.evidence(k, now, dt_s))
+            .map(|k| self.evidence(k, now, dt_s, poses_now))
             .collect()
     }
 
@@ -1220,10 +1395,11 @@ impl BeliefGrid {
         dt_s: f64,
     ) -> QualityLayer {
         let area = self.resolution_m * self.resolution_m;
+        let poses_now = self.poses_now(now);
         let reasons: Vec<DeficitReason> = (0..self.cell_count())
             .map(|k| {
                 assess(
-                    &self.evidence(k, now, dt_s),
+                    &self.evidence(k, now, dt_s, poses_now),
                     area,
                     per_return_sigma_m,
                     self.image_footprint.map(|(_, finest)| finest),
@@ -1309,6 +1485,24 @@ impl BeliefGrid {
             .as_mut()
             .map(|detector| detector.add_points(scan.origin_m[2], &scan.wire_points));
         if let Some(tracker) = self.wire_tracker.as_mut() {
+            // A scan's points by its pose, at the worst of them.
+            let sigma_m = scan.pose.map_or([0.0; 2], |pose| {
+                let far = scan
+                    .wire_points
+                    .iter()
+                    .map(|p| {
+                        let d: [f64; 3] = std::array::from_fn(|k| p[k] - scan.origin_m[k]);
+                        pose.at(d)
+                    })
+                    .fold([0.0f64; 2], |a, b| [a[0].max(b[0]), a[1].max(b[1])]);
+                let [vertical, horizontal] = if scan.wire_points.is_empty() {
+                    [pose.vertical_sigma_m, pose.horizontal_sigma_m]
+                } else {
+                    far
+                };
+                [horizontal, vertical]
+            });
+            tracker.seen_from_pose(sigma_m);
             tracker.add_points(wire_points.as_deref().unwrap_or(&scan.wire_points));
             for line in &scan.wire_lines {
                 tracker.add_camera_line(scan.origin_m, line.from_dir, line.to_dir);
@@ -1526,6 +1720,12 @@ impl BeliefGrid {
         self.unsettled_scans
     }
 
+    /// Captures refused because the aircraft was too lost to say which cell
+    /// its returns were in.
+    pub fn misplaced_scans(&self) -> u64 {
+        self.misplaced_scans
+    }
+
     /// Pod captures refused stowed.
     pub fn stowed_scans(&self) -> u64 {
         self.stowed_scans
@@ -1559,12 +1759,26 @@ impl BeliefGrid {
                 return;
             }
         }
+        // Lost by more than half a cell, it cannot say which cell it saw: a
+        // building in the wrong cell, or a wire in the wrong place, is worse
+        // than one not yet mapped. The navigation camera is for where the
+        // aircraft is going, which is off by the same error.
+        let misplaced = scan
+            .pose
+            .is_some_and(|pose| pose.horizontal_sigma_m > 0.5 * self.resolution_m);
+        if misplaced && scan.sensor == ScanSensor::RangeScanner {
+            self.misplaced_scans += 1;
+            return;
+        }
         let image_pose = scan
             .pod
             .as_ref()
             .and_then(|pod| pod.images.as_ref())
             .and_then(|images| images.visible_pose);
-        self.integrate_wire_evidence(scan);
+        // What it avoids by now, though, is not the map's wires.
+        if !misplaced {
+            self.integrate_wire_evidence(scan);
+        }
         for wire in &scan.wires {
             if !self.wires.contains_key(&wire.span.id) {
                 self.wires.insert(wire.span.id.clone(), wire.span.clone());
@@ -1576,6 +1790,7 @@ impl BeliefGrid {
             self.integrate_camera(scan);
             return;
         }
+        let mut best_now: Option<[f64; 2]> = None;
         for hit in &scan.returns {
             let Some(index) = self.cell_of(hit.point_m[0], hit.point_m[1]) else {
                 continue;
@@ -1584,6 +1799,16 @@ impl BeliefGrid {
                 ReturnClass::Ground => {
                     self.ground_sum[index] += hit.point_m[2];
                     self.ground_count[index] += 1;
+                    let sigmas = self.posed.as_mut().map(|posed| {
+                        let from = hit.ray_origin_m(scan.origin_m);
+                        let sigmas = scan.pose.map_or([0.0; 2], |pose| {
+                            pose.at(std::array::from_fn(|k| hit.point_m[k] - from[k]))
+                        });
+                        let weight = pose_weight(sigmas[0]);
+                        posed.ground_weight[index] += weight;
+                        posed.ground_height[index] += weight * hit.point_m[2];
+                        sigmas
+                    });
                     if let Some(limit_deg) = self.accept_incidence_deg {
                         // From where this ray started: a timed scan's rays
                         // start where the aircraft had flown to (SR3).
@@ -1600,13 +1825,22 @@ impl BeliefGrid {
                             if let Some(plane) = self.accepted_plane.get_mut(index) {
                                 let centre =
                                     |k: usize, low: f64| low + (k as f64 + 0.5) * self.resolution_m;
-                                plane.add(
+                                // As the heights are: a well-placed return
+                                // outweighs a badly placed one.
+                                plane.add_weighted(
+                                    sigmas.map_or(1.0, |sigmas| pose_weight(sigmas[0])),
                                     hit.point_m[0] - centre(index % self.nx, self.x_min_m),
                                     hit.point_m[1] - centre(index / self.nx, self.y_min_m),
                                     z,
                                 );
                             }
                             self.accepted_tick[index] = tick as i64;
+                            if let (Some(posed), Some(sigmas)) = (self.posed.as_mut(), sigmas) {
+                                posed.accept(index, z, sigmas);
+                                best_now = Some(best_now.map_or(sigmas, |best: [f64; 2]| {
+                                    [best[0].min(sigmas[0]), best[1].min(sigmas[1])]
+                                }));
+                            }
                         }
                     }
                     self.log_odds[index] =
@@ -1641,6 +1875,9 @@ impl BeliefGrid {
                 }
             }
             self.touch(index, tick);
+        }
+        if let (Some(posed), Some(best)) = (self.posed.as_mut(), best_now) {
+            posed.now.insert(scan.node_id.clone(), (tick, best));
         }
         // After the returns, so the ground they measured is in the image.
         if let Some(pose) = image_pose {
@@ -2044,15 +2281,15 @@ pub struct WireBounds {
 }
 
 impl WireBounds {
-    fn raise(&mut self, floor_m: f64) {
+    pub(crate) fn raise(&mut self, floor_m: f64) {
         self.floor_m = Some(self.floor_m.map_or(floor_m, |f| f.max(floor_m)));
     }
 
-    fn lower(&mut self, ceiling_m: f64) {
+    pub(crate) fn lower(&mut self, ceiling_m: f64) {
         self.ceiling_m = Some(self.ceiling_m.map_or(ceiling_m, |c| c.min(ceiling_m)));
     }
 
-    fn over(&mut self, over_m: f64) {
+    pub(crate) fn over(&mut self, over_m: f64) {
         self.over_m = Some(self.over_m.map_or(over_m, |o| o.max(over_m)));
     }
 }
@@ -2178,10 +2415,14 @@ fn deficit_weight(
     match reason {
         DeficitReason::Unseen => weights.unseen,
         DeficitReason::TooOblique => weights.too_oblique,
-        DeficitReason::Sparse => weights.sparse,
+        // More returns, better placed, is what both lack.
+        DeficitReason::Sparse | DeficitReason::PoseUncertain => weights.sparse,
         DeficitReason::Stale => weights.stale,
         DeficitReason::ImageCoarse => weights.image_coarse,
-        DeficitReason::Met | DeficitReason::BiasLimited | DeficitReason::ImageLimited => 0.0,
+        DeficitReason::Met
+        | DeficitReason::BiasLimited
+        | DeficitReason::ImageLimited
+        | DeficitReason::PoseLimited => 0.0,
     }
 }
 
@@ -2820,6 +3061,53 @@ impl BeliefSnapshot {
         bounds
     }
 
+    /// [`Self::hazard_bounds_ahead`] for an aircraft that knows where it is
+    /// only to `unsure_m`, `[horizontal, vertical]`: lost sideways, what is
+    /// beside its way may be on it, so a wire there is kept over or under as
+    /// one ahead is; and it keeps `unsure_m[1]` more than the clearance.
+    pub fn hazard_bounds_within(
+        &self,
+        xy_m: [f64; 2],
+        direction: [f64; 2],
+        reach_m: f64,
+        z_m: f64,
+        clearance_m: f64,
+        unsure_m: [f64; 2],
+    ) -> WireBounds {
+        let [beside_m, above_m] = unsure_m;
+        let mut bounds = self.hazard_bounds_ahead(xy_m, direction, reach_m, z_m, clearance_m);
+        let moving = direction != [0.0, 0.0];
+        let strips = (beside_m / MARGIN_STRIP_M).ceil() as i64;
+        for k in (-strips..=strips).filter(|k| *k != 0) {
+            let w = beside_m * k as f64 / strips as f64;
+            let side = if moving {
+                [-direction[1] * w, direction[0] * w]
+            } else {
+                [w, 0.0]
+            };
+            let beside = self.hazard_bounds_ahead(
+                [xy_m[0] + side[0], xy_m[1] + side[1]],
+                direction,
+                reach_m,
+                z_m,
+                clearance_m,
+            );
+            if let Some(floor) = beside.floor_m {
+                bounds.raise(floor);
+            }
+            if let Some(ceiling) = beside.ceiling_m {
+                bounds.lower(ceiling);
+            }
+            if let Some(over) = beside.over_m {
+                bounds.over(over);
+            }
+        }
+        bounds.floor_m = bounds.floor_m.map(|floor| floor + above_m);
+        bounds.ceiling_m = bounds.ceiling_m.map(|ceiling| ceiling - above_m);
+        bounds.over_m = bounds.over_m.map(|over| over + above_m);
+        bounds
+    }
+
     /// The heights to keep for everything known ahead (W4): fitted wires as
     /// [`Self::wire_bounds_ahead`], poles, and evidence no track has
     /// confirmed, which is where a wire is first known at all.
@@ -3183,6 +3471,9 @@ pub struct PhysicalGuard {
     /// surface (R3). Empty in a world without lines.
     wires: Arc<Vec<ConductorEnvelope>>,
     contacts: Arc<Mutex<Vec<WorldContact>>>,
+    /// Where aircraft are for where they believe they are. `None` when they
+    /// are where they believe.
+    flown: Option<crate::navigation::FlownPositions>,
 }
 
 impl std::fmt::Debug for PhysicalGuard {
@@ -3203,7 +3494,44 @@ impl PhysicalGuard {
             clearance_m,
             wires: Arc::new(Vec::new()),
             contacts: Arc::new(Mutex::new(Vec::new())),
+            flown: None,
         }
+    }
+
+    /// The guard, with every position it is asked about one an aircraft
+    /// believes it is at: what it meets there is what is where it really is.
+    pub fn with_flown_positions(mut self, flown: crate::navigation::FlownPositions) -> Self {
+        self.flown = Some(flown);
+        self
+    }
+
+    /// How far `node_id` is from where it believes it is.
+    fn off_m(&self, node_id: &str, believed: [f64; 3]) -> [f64; 3] {
+        self.flown.as_ref().map_or([0.0; 3], |flown| {
+            let truth = flown.truth(node_id, believed);
+            std::array::from_fn(|k| truth[k] - believed[k])
+        })
+    }
+
+    /// Where `node_id` believes it is once physics has moved it from `at_m`,
+    /// where it was while believing it was at `position_m`, to `moved_m`.
+    fn believed(
+        &self,
+        node_id: &str,
+        position_m: [f64; 3],
+        at_m: [f64; 3],
+        moved_m: [f64; 3],
+    ) -> [f64; 3] {
+        // Moved by as much, where the error is the same there.
+        let by_as_much = std::array::from_fn(|k| position_m[k] + (moved_m[k] - at_m[k]));
+        let Some(flown) = &self.flown else {
+            return by_as_much;
+        };
+        let truth = flown.truth(node_id, by_as_much);
+        if (0..3).all(|k| (truth[k] - moved_m[k]).abs() < 1e-9) {
+            return by_as_much;
+        }
+        flown.believed(node_id, moved_m)
     }
 
     /// How far from the ground and structures the guard keeps platforms,
@@ -3231,8 +3559,20 @@ impl PhysicalGuard {
     }
 
     /// `position` moved out of the ground, out of any structure and away
-    /// from any wire, with a contact recorded for each move.
+    /// from any wire, with a contact recorded for each move. An aircraft that
+    /// is not where it believes is moved by what it meets where it is.
     pub fn enforce(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
+        // An error it has none of where it is, it may have where it is moved.
+        let off = self.off_m(node_id, position);
+        if self.flown.is_none() {
+            return self.enforce_true(node_id, timestamp_s, position);
+        }
+        let at = std::array::from_fn(|k| position[k] + off[k]);
+        let moved = self.enforce_true(node_id, timestamp_s, at);
+        self.believed(node_id, position, at, moved)
+    }
+
+    fn enforce_true(&self, node_id: &str, timestamp_s: f64, position: [f64; 3]) -> [f64; 3] {
         let mut p = position;
         // A push out of one structure can land in the next: push again, up
         // to eight times, as the reference's `push_outside_obstacles` does.
@@ -3294,11 +3634,28 @@ impl PhysicalGuard {
         from: [f64; 3],
         position: [f64; 3],
     ) -> [f64; 3] {
+        let (off_from, off) = (self.off_m(node_id, from), self.off_m(node_id, position));
+        if self.flown.is_none() {
+            return self.enforce_from_true(node_id, timestamp_s, from, position);
+        }
+        let at = std::array::from_fn(|k| position[k] + off[k]);
+        let start = std::array::from_fn(|k| from[k] + off_from[k]);
+        let moved = self.enforce_from_true(node_id, timestamp_s, start, at);
+        self.believed(node_id, position, at, moved)
+    }
+
+    fn enforce_from_true(
+        &self,
+        node_id: &str,
+        timestamp_s: f64,
+        from: [f64; 3],
+        position: [f64; 3],
+    ) -> [f64; 3] {
         let length = ((position[0] - from[0]).powi(2)
             + (position[1] - from[1]).powi(2)
             + (position[2] - from[2]).powi(2))
         .sqrt();
-        let stop = match self.first_structure_hit(from, position) {
+        let stop = match self.structure_hit_true(from, position) {
             Some(t) if t > 0.0 && length > 0.0 => {
                 let f = ((t * length - SWEEP_STOP_SHORT_M) / length).max(0.0);
                 let stop = [
@@ -3315,15 +3672,18 @@ impl PhysicalGuard {
             }
             _ => position,
         };
-        self.enforce(node_id, timestamp_s, stop)
+        self.enforce_true(node_id, timestamp_s, stop)
     }
 
     /// The lowest a platform may be at `p`'s place: the guard's clearance
     /// over the ground.
-    /// Whether `p` is somewhere a platform cannot be: below the true ground,
-    /// inside a structure or inside a wire. Within the clearance above the
-    /// ground is not: a platform lands there.
-    pub fn violates(&self, p: [f64; 3]) -> bool {
+    /// Whether `node_id` believing itself at `believed` is somewhere a
+    /// platform cannot be: below the true ground, inside a structure or
+    /// inside a wire. Within the clearance above the ground is not: a
+    /// platform lands there.
+    pub fn violates(&self, node_id: &str, believed: [f64; 3]) -> bool {
+        let off = self.off_m(node_id, believed);
+        let p: [f64; 3] = std::array::from_fn(|k| believed[k] + off[k]);
         p[2] < TerrainSampler::height_at(&self.terrain, p[0], p[1])
             || self.obstacles.collides(p)
             || self.wires.iter().any(|wire| wire.contains(p))
@@ -3355,7 +3715,21 @@ impl PhysicalGuard {
     /// thinner than any sampling step is still met, and solved against each
     /// wire piece's capsule ([`ConductorEnvelope::first_entry`]), counting
     /// how far the wire can sag below the piece. `None` when it meets none.
-    pub fn first_structure_hit(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+    /// The segment is the one `node_id` believes it flies.
+    pub fn first_structure_hit(&self, node_id: &str, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+        let (from, to) = self.flown_truth(node_id, from, to);
+        self.structure_hit_true(from, to)
+    }
+
+    /// Where `node_id` really flies, believing it flies from `from` to `to`.
+    fn flown_truth(&self, node_id: &str, from: [f64; 3], to: [f64; 3]) -> ([f64; 3], [f64; 3]) {
+        match &self.flown {
+            Some(flown) => (flown.truth(node_id, from), flown.truth(node_id, to)),
+            None => (from, to),
+        }
+    }
+
+    fn structure_hit_true(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
         let layer = self.obstacles.layer();
         let around = argusnet_types::Bounds2d::new(
             from[0].min(to[0]),
@@ -3380,8 +3754,9 @@ impl PhysicalGuard {
     /// Where the flight from `from` to `to` first comes within the guard's
     /// clearance of the ground, as a fraction of it: solved on the terrain's
     /// cells ([`crate::ground::first_within`]), not sampled. `None` when it
-    /// never does.
-    pub fn first_ground_contact(&self, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+    /// never does. The flight is the one `node_id` believes it makes.
+    pub fn first_ground_contact(&self, node_id: &str, from: [f64; 3], to: [f64; 3]) -> Option<f64> {
+        let (from, to) = self.flown_truth(node_id, from, to);
         crate::ground::first_within(&self.terrain, from, to, self.clearance_m)
     }
 
@@ -3446,6 +3821,7 @@ mod tests {
             pod: None,
             wire_points: Vec::new(),
             wire_lines: Vec::new(),
+            pose: None,
         }
     }
 
@@ -3596,6 +3972,67 @@ mod tests {
         );
     }
 
+    /// A cell mapped by a lost aircraft says so, is worth flying again only
+    /// once one that is not lost is mapping, and then becomes the good pass:
+    /// its height too.
+    #[test]
+    fn a_badly_placed_cell_is_fixed_by_a_well_placed_pass() {
+        use crate::navigation::PoseQuality;
+        use argusnet_mapping::quality::{DeficitReason, QualityRequirement};
+        let requirement = QualityRequirement {
+            min_ground_density_per_m2: Some(0.02),
+            max_vertical_sigma_m: Some(0.5),
+            max_age_s: None,
+            max_image_gsd_m: None,
+            max_horizontal_sigma_m: None,
+            max_incidence_deg: 45.0,
+            bias_floor_m: 0.05,
+        };
+        let mut belief = grid();
+        belief.track_quality(requirement.max_incidence_deg);
+        belief.track_poses();
+        let pass = |node: &str, height: f64, sigma: f64| {
+            let mut scan = scan(vec![ground(25.0, 25.0, height); 8]);
+            scan.node_id = node.into();
+            scan.origin_m = [25.0, 25.0, 100.0];
+            scan.pose = Some(PoseQuality {
+                vertical_sigma_m: sigma,
+                horizontal_sigma_m: sigma,
+                heading_sigma_rad: 0.0,
+                tilt_sigma_rad: 0.0,
+            });
+            scan
+        };
+        let reason = |belief: &BeliefGrid, tick| {
+            let layer = belief.quality(&requirement, 0.1, tick, 1.0);
+            let index = belief.cell_of(25.0, 25.0).unwrap();
+            layer.reasons[index]
+        };
+        // Lost by more than half a 10 m cell, it cannot say what it saw.
+        belief.integrate(&pass("lost", 12.0, 5.1), 1);
+        assert_eq!(belief.misplaced_scans(), 1);
+        assert_eq!(belief.known_cells(), 0);
+        belief.integrate(&pass("lost", 12.0, 2.0), 1);
+        assert_eq!(reason(&belief, 1), DeficitReason::PoseLimited);
+        // Another finds itself over somewhere else: now a revisit would help.
+        let mut elsewhere = pass("found", 10.0, 0.02);
+        elsewhere.returns = vec![ground(75.0, 75.0, 10.0)];
+        elsewhere.origin_m = [75.0, 75.0, 100.0];
+        belief.integrate(&elsewhere, 2);
+        assert_eq!(reason(&belief, 2), DeficitReason::PoseUncertain);
+        // It goes home. The lost one maps on, and nothing can help again.
+        let later = 2 + POSE_NOW_TICKS + 1;
+        belief.integrate(&pass("lost", 12.0, 2.0), later);
+        assert_eq!(reason(&belief, later), DeficitReason::PoseLimited);
+        // All down: what was true when the last mapped still is.
+        assert_eq!(reason(&belief, later + 10_000), DeficitReason::PoseLimited);
+        belief.integrate(&pass("found", 10.0, 0.02), later + 1);
+        assert_eq!(reason(&belief, later + 1), DeficitReason::Met);
+        let (i, j) = (2, 2);
+        let height = belief.ground_ij(i, j).unwrap();
+        assert!((height - 10.0).abs() < 0.01, "{height}");
+    }
+
     /// Canopy returns are soft structure: the cell is seen and keeps its
     /// highest crown, shown to the replay when first seen or moved 10 cm,
     /// but it is never occupied, so nothing collides with it. A grid that
@@ -3611,6 +4048,7 @@ mod tests {
             max_vertical_sigma_m: None,
             max_age_s: None,
             max_image_gsd_m: None,
+            max_horizontal_sigma_m: None,
             max_incidence_deg: 30.0,
             bias_floor_m: 0.0,
         };
@@ -4145,13 +4583,64 @@ mod tests {
     #[test]
     fn the_guard_says_where_a_platform_cannot_be() {
         let guard = guard_over(None, &[wire(20.0)]);
-        assert!(guard.violates([10.0, 10.0, -0.1]), "below the ground");
+        assert!(guard.violates("d", [10.0, 10.0, -0.1]), "below the ground");
         assert!(
-            !guard.violates([10.0, 10.0, 0.5]),
+            !guard.violates("d", [10.0, 10.0, 0.5]),
             "landed, within the clearance"
         );
-        assert!(guard.violates([50.0, 0.0, 20.0]), "on the wire");
-        assert!(!guard.violates([50.0, 0.0, 30.0]));
+        assert!(guard.violates("d", [50.0, 0.0, 20.0]), "on the wire");
+        assert!(!guard.violates("d", [50.0, 0.0, 30.0]));
+    }
+
+    /// An aircraft that is not where it believes meets what is where it is,
+    /// and is moved by it; one that believes it is on a wire and is not, is
+    /// not stopped. Another aircraft's error is not its own.
+    #[test]
+    fn the_guard_meets_an_aircraft_where_it_is() {
+        use crate::navigation::FlownPositions;
+        let low = guard_over(None, &[wire(20.0)])
+            .with_flown_positions(FlownPositions::always_off("d", [0.0, 0.0, -10.0]));
+        assert!(low.violates("d", [50.0, 0.0, 30.0]), "it is on the wire");
+        assert!(!low.violates("e", [50.0, 0.0, 30.0]), "this one is not");
+        assert!(!low.violates("d", [50.0, 0.0, 20.0]), "nor is it here");
+        assert!(low.violates("d", [10.0, 10.0, 9.0]), "below the ground");
+        let held = low.enforce("d", 0.0, [10.0, 10.0, 9.0]);
+        assert!(
+            (held[2] - (10.0 + low.clearance_m())).abs() < 1e-9,
+            "held above the ground it met, 10 m higher than it thought: {held:?}"
+        );
+        assert_eq!(low.take_contacts().len(), 1);
+        // A flight it thinks is over the wire, and is through it.
+        low.enforce_from("d", 1.0, [50.0, -40.0, 30.0], [50.0, 40.0, 30.0]);
+        assert!(!low.take_contacts().is_empty());
+        let clear = low.enforce_from("e", 2.0, [50.0, -40.0, 32.0], [50.0, 40.0, 32.0]);
+        assert_eq!(clear, [50.0, 40.0, 32.0]);
+        assert!(low.take_contacts().is_empty());
+    }
+
+    /// Near its pad an aircraft's error shrinks, so where it believes it is
+    /// once moved is not where it was plus the move: it is moved out of what
+    /// it met all the same, from anywhere.
+    #[test]
+    fn an_aircraft_near_its_pad_is_left_out_of_what_it_met() {
+        use crate::navigation::FlownPositions;
+        for offset in [[0.0, 0.0, -30.0], [12.0, -9.0, -30.0], [0.0, 25.0, -4.0]] {
+            let flown = FlownPositions::off_from_pad("d", offset, [0.0, 0.0, 0.0]);
+            let guard = guard_over(None, &[]).with_flown_positions(flown.clone());
+            for x in [0.0, 8.0, 20.0, 40.0] {
+                for z in [-5.0, 0.5, 4.0, 10.0, 14.0, 40.0] {
+                    let held = guard.enforce("d", 0.0, [x, 0.0, z]);
+                    let truth = flown.truth("d", held);
+                    assert!(!guard.violates("d", held), "{offset:?} {x} {z}: {held:?}");
+                    assert!(
+                        truth[2] >= guard.clearance_m() - 1e-6,
+                        "{offset:?} {x} {z}: {truth:?}"
+                    );
+                    let swept = guard.enforce_from("d", 0.0, [x, 0.0, 60.0], [x, 0.0, z]);
+                    assert!(!guard.violates("d", swept), "{offset:?} {x} {z}: {swept:?}");
+                }
+            }
+        }
     }
 
     /// A platform within the guard's clearance of a wire is pushed straight
@@ -4277,11 +4766,11 @@ mod tests {
         use argusnet_world::obstacles::{BlockerType, Obstacle};
         let guard = guard_over(None, &[wire(20.0)]);
         let (from, to) = ([50.0, -10.0, 20.0], [50.0, 10.0, 20.0]);
-        let t = guard.first_structure_hit(from, to).expect("met");
+        let t = guard.first_structure_hit("d", from, to).expect("met");
         assert!((t - (10.0 - 1.02) / 20.0).abs() < 1e-12, "{t}");
         // Over it with room to spare: not met.
         assert_eq!(
-            guard.first_structure_hit([50.0, -10.0, 21.1], [50.0, 10.0, 21.1]),
+            guard.first_structure_hit("d", [50.0, -10.0, 21.1], [50.0, 10.0, 21.1]),
             None
         );
         let wall = Obstacle::polygon_prism(
@@ -4293,10 +4782,13 @@ mod tests {
         )
         .unwrap();
         let guarded = guard_over(Some(wall), &[wire(20.0)]);
-        let t = guarded.first_structure_hit(from, to).expect("met");
+        let t = guarded.first_structure_hit("d", from, to).expect("met");
         assert!((t - 4.0 / 20.0).abs() < 1e-12, "{t}");
         // A guard without lines meets no wire.
-        assert_eq!(guard_over(None, &[]).first_structure_hit(from, to), None);
+        assert_eq!(
+            guard_over(None, &[]).first_structure_hit("d", from, to),
+            None
+        );
     }
     /// A wall 10 m thick across the map at x = 0, from 0 to 100 m up.
     fn thin_wall() -> argusnet_world::obstacles::Obstacle {

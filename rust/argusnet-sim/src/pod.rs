@@ -1293,6 +1293,7 @@ impl PodSensing {
             }),
             wire_points,
             wire_lines: Vec::new(),
+            pose: None,
         }
     }
 }
@@ -1334,6 +1335,7 @@ mod tests {
             max_vertical_sigma_m: None,
             max_age_s: None,
             max_image_gsd_m: None,
+            max_horizontal_sigma_m: None,
             max_incidence_deg: 40.0,
             bias_floor_m: 0.0,
         };
