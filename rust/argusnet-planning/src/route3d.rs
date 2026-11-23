@@ -131,6 +131,8 @@ pub struct Route3d {
     pub cost_wh: f64,
     /// What the straight flight would cost, climbing over what it meets.
     pub direct_wh: f64,
+    /// Whether the straight flight meets a wire.
+    pub meets_wire: bool,
     /// Nodes expanded to find it.
     pub expanded: usize,
 }
@@ -422,6 +424,7 @@ pub fn plan(
         length_m,
         cost_wh: cost,
         direct_wh,
+        meets_wire: wire,
         expanded: closed.len(),
     })
 }
@@ -531,6 +534,7 @@ mod tests {
         let tower = world(vec![[-15.0, 15.0, -15.0, 15.0, 180.0]], vec![]);
         let round = route(&tower);
         flies_clear(&tower, &round);
+        assert!(!round.meets_wire);
         assert!(
             round.corners_m.iter().all(|c| c[2] < 60.0),
             "round, not over: {round:?}"
@@ -575,6 +579,7 @@ mod tests {
         let wire = |low: f64| world(vec![], vec![[-15.0, 15.0, -1000.0, 1000.0, low, 120.0]]);
         let under = wire(35.0);
         let found = route(&under);
+        assert!(found.meets_wire);
         flies_clear(&under, &found);
         assert!(found.corners_m.iter().all(|c| c[2] <= 40.0), "{found:?}");
         // No room between the ground and the wire: over it.

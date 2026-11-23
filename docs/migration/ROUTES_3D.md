@@ -32,6 +32,10 @@ enough and no dearer.
 | `Route`: saves 5% of the straight flight's energy as the governor would climb it, or the straight flight meets a wire and the route costs no more | The route |
 | `NotWorth`, `None` | As without it |
 
+The router's air holds the wires the map measured. A plan, straight or routed,
+that comes within a wire the map was *given* is not flown; those are kept off as
+they always were. A wire mapped later replans a routed flight too.
+
 The governor and the physical guard still have the last word on every flight.
 Ties go to the earlier node, so a run is deterministic and resumes exactly.
 
