@@ -2171,7 +2171,10 @@ impl AssembledRun {
                 if imaging.finest_gsd_m(optics) <= gsd_m {
                     let agl_m = imaging.agl_for_gsd_m(optics, gsd_m);
                     controllers.cap_agl(agl_m);
-                    controllers.cap_speeds(imaging.max_sharp_speed_mps(optics, agl_m));
+                    // At the height each flies, which may be lower still.
+                    controllers.cap_speeds_at(agl_m, |height_m| {
+                        imaging.max_sharp_speed_mps(optics, height_m)
+                    });
                 }
             }
         }
