@@ -42,7 +42,7 @@ canonical site, mission and trajectory contracts (S1).
 | --- | --- | --- |
 | Scan | at least 140 s | 294–361 s |
 | Mission | at least 166 s | 486–534 s, 120 s of it the follow up |
-| Energy, both drones | at least 27 Wh for the scan | 152–186 Wh for the mission |
+| Energy, both drones | at least 27 Wh for the scan | 155–186 Wh for the mission |
 
 The plan's figures are floors: no overlap, turn, transit, wire or hill is in them, and
 legs are straight. A scan took 2.1 to 2.6 times its floor. So `time` and `scan_energy` find
