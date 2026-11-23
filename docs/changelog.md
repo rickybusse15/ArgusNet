@@ -2,6 +2,14 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- World: fixed a false obstruction in `segment_polygon_intervals`
+  (`rust/argusnet-world/src/obstacles.rs`). A ray that missed a footprint by
+  less than the boundary tolerance, crossing no edge, was inside for its whole
+  length if its midpoint was beside the footprint, so line of sight was blocked
+  from the observer on. A midpoint on the boundary now counts only if the
+  interior holds it or its whole span runs along the boundary, so a route along
+  a footprint's edge is still not free. Python calls the same function. No
+  compared replay changed.
 - LiDAR returns (SR3). `--lidar-returns` fires the pod LiDAR's rays across the
   capture, admits each return with the chance its reflectivity, incidence and
   range give, and applies range bias, quantization, angular noise and dropout

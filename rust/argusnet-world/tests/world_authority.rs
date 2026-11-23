@@ -58,6 +58,51 @@ fn tiled_bilinear_lods_and_boundaries_share_surface() {
     assert_eq!(t.height_at(-1.0, 1.0), 0.0);
     assert_eq!(t.tiles.len(), 8);
 }
+/// A sight line that passes just outside a building's corner, with its
+/// midpoint there, is clear: it crosses no wall, and nothing of it but the
+/// moment at the corner is within the boundary's tolerance.
+#[test]
+fn a_sight_line_grazing_a_corner_at_its_midpoint_is_clear() {
+    let bounds = Bounds2d::new(-40.0, 120.0, -40.0, 120.0);
+    let ground = TiledTerrain::from_grid(
+        bounds,
+        &vec![vec![-50.0; 5]; 5],
+        40.0,
+        2,
+        -50.0,
+        &[40.0, 80.0],
+    )
+    .unwrap();
+    let building = Obstacle::polygon_prism(
+        "b",
+        BlockerType::Building,
+        vec![[20.0, 30.0], [30.0, 30.0], [30.0, 40.0], [20.0, 40.0]],
+        0.0,
+        10.0,
+    )
+    .unwrap();
+    let obstacles = ObstacleLayer::new(bounds, 40.0, vec![building]).unwrap();
+    let sight = |from, to| {
+        let profile = VisibilityProfile::default();
+        visibility::los(&ground, &obstacles, from, to, &profile, 0, 1.0)
+    };
+    // 0.05 um outside the corner at (30, 30).
+    for (from, to) in [
+        ([-19.999_999_9, -20.0, 5.0], [80.0, 80.0, 5.0]),
+        ([-19.999_999_9, -20.0, 30.0], [80.0, 80.0, -5.0]),
+        ([80.0, 80.0, 5.0], [-19.999_999_9, -20.0, 5.0]),
+    ] {
+        let result = sight(from, to);
+        assert!(result.visible, "{from:?} -> {to:?}: {result:?}");
+        assert_eq!(result.blocker_type, "none");
+        assert_eq!(result.first_hit_range_m, None);
+    }
+    // Through the corner's building, a metre further in, it is blocked there.
+    let through = sight([-21.0, -20.0, 5.0], [79.0, 80.0, 5.0]);
+    assert_eq!(through.blocker_type, "building");
+    let range = through.first_hit_range_m.unwrap();
+    assert!((range - 50.0 * 2.0_f64.sqrt()).abs() < 1e-6, "{range}");
+}
 #[test]
 fn pyramids_preserve_extrema_for_odd_rectangles() {
     let mut grid = vec![vec![2.0; 8]; 5];
