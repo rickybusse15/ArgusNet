@@ -395,7 +395,10 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - separation over the believed surface;
 - the fleet follows up on the map before it goes home, and a scan with every drone
   home ends ([MAP_REPORT.md](MAP_REPORT.md));
-- mission flights routed in three dimensions ([ROUTES_3D.md](ROUTES_3D.md)).
+- mission flights routed in three dimensions ([ROUTES_3D.md](ROUTES_3D.md));
+- a drone handed from one controller to another is flown to where it has it, at
+  1.25 times the speed asked (`flown_handovers`): an explorer that ran on while its
+  drone climbed had it up to three steps away.
 
 Limits: [field_v3.thresholds.json](../contracts/field_v3.thresholds.json),
 `field_v2`'s unchanged and `position_within_2_sigma`. The tuning seeds pass every

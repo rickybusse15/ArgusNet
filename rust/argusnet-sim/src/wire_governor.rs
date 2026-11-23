@@ -71,11 +71,41 @@ pub struct WireGovernor {
     /// The horizontal one sigma past which a platform is lost and holds;
     /// `None` flies on, however lost.
     lost_sigma_m: Option<f64>,
+    /// Whether a platform handed to a controller that is ahead of it is flown
+    /// there, whatever handed it over.
+    flown_handovers: bool,
 }
 
 /// How much faster than its controller asks a platform let go from a hold is
 /// flown until it has caught up with where its controller has it.
 const RELEASE_CATCH_UP: f64 = 1.25;
+
+/// The least speed one is caught up at, m/s: a controller's velocity can say
+/// nothing of how far off it has it.
+const LEAST_CATCH_UP_MPS: f64 = 6.0;
+
+/// The step a platform at `from_m` takes toward `to_m`, where a controller
+/// that asks `speed_mps` has it, and its length in plan; `None` when it is near
+/// enough to be there at once. Its height is the governor's.
+fn catch_up(
+    from_m: [f64; 3],
+    to_m: [f64; 3],
+    speed_mps: f64,
+    dt_s: f64,
+) -> Option<([f64; 3], f64)> {
+    let (dx, dy) = (to_m[0] - from_m[0], to_m[1] - from_m[1]);
+    let (step, allowed) = (
+        dx.hypot(dy),
+        RELEASE_CATCH_UP * speed_mps.max(LEAST_CATCH_UP_MPS) * dt_s,
+    );
+    (step > allowed).then(|| {
+        let scale = allowed / step;
+        (
+            [from_m[0] + dx * scale, from_m[1] + dy * scale, to_m[2]],
+            allowed,
+        )
+    })
+}
 
 impl WireGovernor {
     pub fn new(config: WirePlanningConfig, map: BeliefHandle) -> Self {
@@ -99,7 +129,17 @@ impl WireGovernor {
             blind_speed_mps: None,
             flown: None,
             lost_sigma_m: None,
+            flown_handovers: false,
         }
+    }
+
+    /// Fly every platform to where its controller has it, at no more than
+    /// [`RELEASE_CATCH_UP`] times the speed it asks: a controller that ran on
+    /// while its platform climbed from its pad is caught up with, not jumped
+    /// to.
+    pub fn with_flown_handovers(mut self, flown: bool) -> Self {
+        self.flown_handovers = flown;
+        self
     }
 
     /// Hold a platform whose position is worse known than this, as one whose
@@ -447,24 +487,25 @@ impl WireGovernor {
                     }
                 }
                 braking_step_m = Some(allowed.min(step));
-            } else if let (Some(_), None, Some(speed_mps)) = (
-                flown.braking_step_m,
+            } else if let (Some(()), None, Some(speed_mps)) = (
+                (flown.braking_step_m.is_some()
+                    || (self.flown_handovers
+                        && self.state.contains_key(&node_id)
+                        && !rejoining.contains(&node_id)))
+                .then_some(()),
                 mission,
                 context.world.platform(&node_id).map(|platform| {
                     let v = &platform.velocity;
                     v.x.hypot(v.y)
                 }),
             ) {
-                // Let go: its controller ran on while it held, and it is
-                // flown there, not put there.
-                let [fx, fy, _] = flown.position_m;
-                let (dx, dy) = (position[0] - fx, position[1] - fy);
-                let (step, allowed) = (dx.hypot(dy), RELEASE_CATCH_UP * speed_mps * dt_s);
-                if step > allowed {
-                    let scale = allowed / step;
-                    position[0] = fx + dx * scale;
-                    position[1] = fy + dy * scale;
-                    braking_step_m = Some(allowed);
+                // Let go, or handed over: its controller ran on meanwhile, and
+                // it is flown there, not put there.
+                if let Some((caught_up, step_m)) =
+                    catch_up(flown.position_m, position, speed_mps, dt_s)
+                {
+                    position = caught_up;
+                    braking_step_m = Some(step_m);
                 }
             }
             if let Some(guard) = guard {
@@ -560,6 +601,33 @@ mod tests {
             handed_over: false,
             braking_step_m: None,
         }
+    }
+
+    /// Three steps behind its controller (West Pleasant View, seed 119107, the
+    /// tick it is handed over at the top of its climb: 17 m in one tick), it
+    /// is flown after it and is with it in three seconds; at a step it is there.
+    #[test]
+    fn a_platform_behind_its_controller_is_flown_after_it() {
+        let (speed, dt) = (23.6, 0.25);
+        let mut at = [0.0, 0.0, 130.0];
+        let mut asked = 3.0 * speed * dt;
+        let mut ticks = 0;
+        while let Some((next, step_m)) = catch_up(at, [asked, 0.0, 131.0], speed, dt) {
+            assert!((next[0] - at[0] - step_m).abs() < 1e-9 && step_m < 8.0);
+            assert_eq!(next[2], 131.0);
+            at = next;
+            asked += speed * dt;
+            ticks += 1;
+            assert!(ticks < 100, "never");
+        }
+        assert!((4..=12).contains(&ticks), "{ticks} ticks");
+        assert_eq!(
+            catch_up(at, [at[0] + speed * dt, 0.0, 0.0], speed, dt),
+            None
+        );
+        // A controller that says it is still moves it all the same.
+        let (slow, _) = catch_up([0.0; 3], [100.0, 0.0, 0.0], 0.0, 1.0).unwrap();
+        assert_eq!(slow, [7.5, 0.0, 0.0]);
     }
 
     #[test]

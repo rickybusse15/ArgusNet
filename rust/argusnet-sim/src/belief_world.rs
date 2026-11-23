@@ -146,6 +146,11 @@ pub struct ExplorationConfig {
     /// requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plane_heights: bool,
+    /// Fly a drone to where its controller has it when one is handed to the
+    /// other, as a drone let go from a hold is. Needs mission flights. Absent
+    /// puts it there, up to three steps away.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flown_handovers: bool,
     /// Route mission flights in three dimensions over the believed surface
     /// and round the wires, by energy. Needs mission flights. Absent flies
     /// them straight, or round mapped wires in plan.
@@ -551,6 +556,7 @@ impl Default for ExplorationConfig {
             view_planning: None,
             imaging: None,
             plane_heights: false,
+            flown_handovers: false,
             route_3d: None,
             follow_up: None,
             end_when_all_home: false,
@@ -670,6 +676,9 @@ impl ExplorationConfig {
                     );
                 }
             }
+        }
+        if self.flown_handovers && self.mission_flights.is_none() {
+            return Err("flown handovers are governed flights': they need mission flights".into());
         }
         if let Some(route) = &self.route_3d {
             if self.mission_flights.is_none() {

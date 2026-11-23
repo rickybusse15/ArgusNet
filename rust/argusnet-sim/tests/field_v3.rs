@@ -134,6 +134,7 @@ fn the_profile_is_field_v2_and_what_it_adds() {
     exploration.separation_surface = false;
     exploration.follow_up = None;
     exploration.route_3d = None;
+    exploration.flown_handovers = false;
     exploration.end_when_all_home = false;
     assert_eq!(stripped, v2);
 
