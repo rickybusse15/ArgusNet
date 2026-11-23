@@ -54,11 +54,14 @@ FIELD_V1_SEEDS = {
     "heldout": [9401, 9402, 9403, 9404, 9405],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
-#: ``field_v2``: the first set, chosen before its campaign ran (2026-11-22);
-#: no campaign of either profile has used any of them.
+#: ``field_v2``: the second set, chosen before its campaign ran (2026-11-22).
+#: The first (45329..55291 by about 1100, held out 9501..9505) was stopped with
+#: five seeds scored, all passing, when review of the imaging code found two
+#: defects: a build that no longer exists is not evidence, so it counts for
+#: nothing. Its seeds informed no fix, but are not used again either.
 FIELD_V2_SEEDS = {
-    "qualification": [45329, 46439, 47543, 48647, 49757, 50867, 51971, 53077, 54181, 55291],
-    "heldout": [9501, 9502, 9503, 9504, 9505],
+    "qualification": [56393, 57503, 58601, 59707, 60811, 61909, 63029, 64123, 65239, 66343],
+    "heldout": [9601, 9602, 9603, 9604, 9605],
     "tuning": [7, 42, 707, 1010, 9002, 9005, 4451, 13127],
 }
 PROFILE_SEEDS = {"field_v1": FIELD_V1_SEEDS, "field_v2": FIELD_V2_SEEDS}
