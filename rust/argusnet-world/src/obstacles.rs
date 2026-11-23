@@ -965,15 +965,19 @@ pub fn point_in_polygon(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
         if point_on_segment(point, a, b) {
             return true;
         }
-        // Half-open in y, so a vertex shared by two edges is counted once.
-        if (a[1] > point[1]) != (b[1] > point[1]) {
-            let crossing_x = ((b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1])) + a[0];
-            if point[0] < crossing_x {
-                inside = !inside;
-            }
+        if ray_crosses_edge(point, a, b) {
+            inside = !inside;
         }
     }
     inside
+}
+
+/// Whether the ray from `point` towards +X crosses the edge `a -> b`.
+///
+/// Half-open in y, so a vertex shared by two edges is counted once.
+fn ray_crosses_edge(point: [f64; 2], a: [f64; 2], b: [f64; 2]) -> bool {
+    (a[1] > point[1]) != (b[1] > point[1])
+        && point[0] < ((b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1])) + a[0]
 }
 
 /// Intersection parameters of two segments, if they meet within both spans.
@@ -1001,6 +1005,14 @@ pub fn segment_intersection_parameters(
 /// Splits the segment at every edge crossing, then classifies each span by its
 /// midpoint. That handles concave footprints, where a single segment can enter
 /// and leave more than once.
+///
+/// No edge is crossed within a span, so all of it is inside, all of it outside,
+/// or all of it along the boundary. [`point_in_polygon`] counts anything within
+/// [`SEGMENT_EPSILON_M`] of an edge as inside, which is wider than the test
+/// that finds the crossings: a segment can miss a corner, cross nothing, and
+/// still have its midpoint in that band. Such a midpoint speaks for its span
+/// only if the polygon's interior holds it, or the whole span is in the band
+/// ([`runs_along_boundary`]).
 pub fn segment_polygon_intervals(
     origin: [f64; 2],
     target: [f64; 2],
@@ -1030,11 +1042,71 @@ pub fn segment_polygon_intervals(
             origin[0] + (target[0] - origin[0]) * midpoint,
             origin[1] + (target[1] - origin[1]) * midpoint,
         ];
-        if point_in_polygon(sample, polygon) {
+        // The first test is implied by the second and cheaper than it.
+        if point_in_polygon(sample, polygon)
+            && (encloses(sample, polygon)
+                || runs_along_boundary(origin, target, start, end, polygon))
+        {
             intervals.push((start, end));
         }
     }
     intervals
+}
+
+/// [`point_in_polygon`] without its boundary: the even-odd test alone.
+fn encloses(point: [f64; 2], polygon: &[[f64; 2]]) -> bool {
+    (0..polygon.len()).fold(false, |inside, index| {
+        inside != ray_crosses_edge(point, polygon[index], polygon[(index + 1) % polygon.len()])
+    })
+}
+
+/// Whether the part of `origin -> target` from `start` to `end` is on the
+/// boundary, as [`point_on_segment`] judges it, for its whole length.
+///
+/// Its conditions are linear along the segment, so each edge holds one
+/// interval of it, and the span is on the boundary if those intervals cover
+/// it: several edges in a line make one wall.
+fn runs_along_boundary(
+    origin: [f64; 2],
+    target: [f64; 2],
+    start: f64,
+    end: f64,
+    polygon: &[[f64; 2]],
+) -> bool {
+    let direction = [target[0] - origin[0], target[1] - origin[1]];
+    let mut held: Vec<(f64, f64)> = (0..polygon.len())
+        .filter_map(|index| {
+            let a = polygon[index];
+            let b = polygon[(index + 1) % polygon.len()];
+            let edge = [b[0] - a[0], b[1] - a[1]];
+            let relative = [origin[0] - a[0], origin[1] - a[1]];
+            let cross = (edge[0] * relative[1]) - (edge[1] * relative[0]);
+            let cross_rate = (edge[0] * direction[1]) - (edge[1] * direction[0]);
+            let along = dot2(relative, edge);
+            let along_rate = dot2(direction, edge);
+            let (mut lo, mut hi) = (start, end);
+            for (at_origin, rate) in [
+                (SEGMENT_EPSILON_M - cross, -cross_rate),
+                (SEGMENT_EPSILON_M + cross, cross_rate),
+                (SEGMENT_EPSILON_M + along, along_rate),
+                (SEGMENT_EPSILON_M + dot2(edge, edge) - along, -along_rate),
+            ] {
+                clip_half_line(&mut lo, &mut hi, at_origin, rate);
+            }
+            (lo <= hi).then_some((lo, hi))
+        })
+        .collect();
+    held.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Crossings closer than this were merged, so the span's ends are only
+    // that good.
+    let mut reached = start;
+    for (lo, hi) in held {
+        if lo > reached + EPSILON_M {
+            return false;
+        }
+        reached = reached.max(hi);
+    }
+    reached + EPSILON_M >= end
 }
 
 pub fn nearest_point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> [f64; 2] {
@@ -1452,6 +1524,166 @@ mod polygon_tests {
                 point_in_polygon(point, &reversed),
                 "winding changed the verdict at {point:?}"
             );
+        }
+    }
+
+    /// A segment centred on `at`, `reach` long each way, along `direction`.
+    fn centred(at: [f64; 2], direction: [f64; 2], reach: f64) -> ([f64; 2], [f64; 2]) {
+        (
+            [at[0] - direction[0] * reach, at[1] - direction[1] * reach],
+            [at[0] + direction[0] * reach, at[1] + direction[1] * reach],
+        )
+    }
+
+    /// Passing outside a corner by less than the boundary tolerance crosses
+    /// no edge, so the segment is one span; its midpoint being at the corner
+    /// says nothing about the rest of it.
+    #[test]
+    fn a_span_touching_the_boundary_at_its_midpoint_is_not_inside() {
+        let diagonal = [0.5_f64.sqrt(), 0.5_f64.sqrt()];
+        for miss in [2e-8, 5e-8, 9e-8] {
+            let (a, b) = centred([10.0 + miss, 0.0], diagonal, 60.0);
+            assert_eq!(segment_polygon_intervals(a, b, &square()), vec![]);
+            assert_eq!(segment_polygon_intervals(b, a, &square()), vec![]);
+        }
+    }
+
+    /// The same between two crossings: past the tip of a prong, with the
+    /// footprint met on both sides of it.
+    #[test]
+    fn a_gap_touching_the_boundary_at_its_midpoint_is_not_inside() {
+        let comb = [
+            [0.0, 0.0],
+            [40.0, 0.0],
+            [40.0, 20.0],
+            [30.0, 20.0],
+            [30.0, 2.0],
+            [20.0, 10.0],
+            [10.0, 2.0],
+            [10.0, 20.0],
+            [0.0, 20.0],
+        ];
+        let y = 10.0 + 5e-8;
+        let intervals = segment_polygon_intervals([-10.0, y], [50.0, y], &comb);
+        let length: f64 = intervals
+            .iter()
+            .map(|(start, end)| (end - start) * 60.0)
+            .sum();
+        assert!((length - 20.0).abs() < 1e-6, "{intervals:?}");
+    }
+
+    /// Running just outside a wall and on past one end of it, or both.
+    #[test]
+    fn a_span_passing_beside_a_wall_is_not_inside_beyond_it() {
+        for (from, to) in [(-30.0, 40.0), (-4.0, 8.0), (2.0, 14.0)] {
+            for y in [-5e-8, 10.0 + 5e-8] {
+                assert_eq!(
+                    segment_polygon_intervals([from, y], [to, y], &square()),
+                    vec![],
+                    "{from} to {to} at {y}"
+                );
+            }
+        }
+    }
+
+    /// The boundary still counts as inside for a segment that runs along it.
+    /// Routing relies on this: a polygon's edge is never free.
+    #[test]
+    fn a_span_along_the_boundary_is_inside() {
+        // Exactly, and within the tolerance on either side.
+        for y in [0.0, -5e-8, 5e-8, 10.0, 10.0 - 5e-8, 10.0 + 5e-8] {
+            assert_eq!(
+                segment_polygon_intervals([0.0, y], [10.0, y], &square()),
+                vec![(0.0, 1.0)],
+                "{y}"
+            );
+        }
+        // Along it and past both ends: only the part on the wall.
+        let intervals = segment_polygon_intervals([-10.0, 0.0], [20.0, 0.0], &square());
+        assert_eq!(intervals.len(), 1);
+        assert!((intervals[0].0 - 1.0 / 3.0).abs() < 1e-9);
+        assert!((intervals[0].1 - 2.0 / 3.0).abs() < 1e-9);
+        // Along a wall drawn as several edges in a line. The even-odd test
+        // takes a point on the lower wall for inside and one on the upper for
+        // outside, so both are asked.
+        let split = [
+            [0.0, 0.0],
+            [3.0, 0.0],
+            [4.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [4.0, 10.0],
+            [3.0, 10.0],
+            [0.0, 10.0],
+        ];
+        for split in [split.to_vec(), split.iter().rev().copied().collect()] {
+            for y in [0.0, 10.0] {
+                for (from, to) in [([0.0, y], [10.0, y]), ([10.0, y], [0.0, y])] {
+                    assert_eq!(
+                        segment_polygon_intervals(from, to, &split),
+                        vec![(0.0, 1.0)],
+                        "{from:?} to {to:?}"
+                    );
+                }
+            }
+        }
+        // A point on the wall, as a vertical ray sees it.
+        assert_eq!(
+            segment_polygon_intervals([5.0, 0.0], [5.0, 0.0], &square()),
+            vec![(0.0, 1.0)]
+        );
+    }
+
+    /// Whatever the segment, everything reported inside is: no interval
+    /// reaches further from the polygon than the boundary's tolerance.
+    /// Segments are centred on and near every corner, in every direction.
+    #[test]
+    fn every_interval_lies_in_the_polygon() {
+        let notched = vec![
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [6.0, 10.0],
+            [5.0, 3.0],
+            [4.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let gap_to_boundary = |p: [f64; 2], polygon: &[[f64; 2]]| {
+            (0..polygon.len())
+                .map(|i| {
+                    let q =
+                        nearest_point_on_segment(p, polygon[i], polygon[(i + 1) % polygon.len()]);
+                    (q[0] - p[0]).hypot(q[1] - p[1])
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        for polygon in [square(), triangle(), diamond(), notched] {
+            for corner in &polygon {
+                for step in 0..180 {
+                    let angle = f64::from(step) * std::f64::consts::PI / 180.0;
+                    let direction = [angle.cos(), angle.sin()];
+                    for miss in [0.0, 1e-12, 1e-10, 1e-8, 5e-8, 1e-7, 1e-6] {
+                        for side in [-miss, miss] {
+                            let at = [
+                                corner[0] - direction[1] * side,
+                                corner[1] + direction[0] * side,
+                            ];
+                            let (a, b) = centred(at, direction, 35.0);
+                            for (start, end) in segment_polygon_intervals(a, b, &polygon) {
+                                for k in 0..=8 {
+                                    let t = start + (end - start) * f64::from(k) / 8.0;
+                                    let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                                    assert!(
+                                        point_in_polygon(p, &polygon)
+                                            || gap_to_boundary(p, &polygon) < 1e-5,
+                                        "{a:?} -> {b:?} inside at {p:?} of {polygon:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
