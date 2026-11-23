@@ -348,26 +348,10 @@ impl SharedVisibility {
             let point: [f64; 3] = std::array::from_fn(|i| from[i] + (end[i] - from[i]) * t);
             (t, "terrain".to_string(), point)
         });
-        let box_ = argusnet_world::obstacles::Bounds2d::new(
-            from[0].min(end[0]),
-            from[0].max(end[0]) + 1e-6,
-            from[1].min(end[1]),
-            from[1].max(end[1]) + 1e-6,
-        );
-        let structure = self
-            .obstacles
-            .query(box_)
-            .into_iter()
-            .filter(|o| o.blocker_type.is_hard())
-            .filter_map(|o| {
-                o.surface_hit_t(from, end)
-                    .map(|t| (t, o.blocker_type.as_str().to_string()))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(t, kind)| {
-                let point: [f64; 3] = std::array::from_fn(|i| from[i] + (end[i] - from[i]) * t);
-                (t, kind, point)
-            });
+        let structure = self.obstacles.first_hard_hit(from, end).map(|(o, t)| {
+            let point: [f64; 3] = std::array::from_fn(|i| from[i] + (end[i] - from[i]) * t);
+            (t, o.blocker_type.as_str().to_string(), point)
+        });
         match (terrain, structure) {
             (Some(t), Some(o)) => Some(if o.0 < t.0 { o } else { t }),
             (t, o) => t.or(o),
