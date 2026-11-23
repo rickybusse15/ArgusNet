@@ -402,5 +402,5 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 
 Limits: [field_v3.thresholds.json](../contracts/field_v3.thresholds.json),
 `field_v2`'s unchanged and `position_within_2_sigma`. It qualified 15 of 15
-on each site, on the second seed sets
+on each site, on the fourth seed sets
 ([record](../performance/field-v3-qualification-2026-11-23.md)).
