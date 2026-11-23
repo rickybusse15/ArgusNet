@@ -600,7 +600,8 @@ impl StageHandler for DeconflictStage {
                 (node_id.clone(), carried)
             })
             .collect();
-        let (wanted, events) = self.vertical_separation(&proposed, &held, context.timestamp_s);
+        let (wanted, events, short) =
+            self.vertical_separation(&proposed, &held, context.timestamp_s);
         let mut moved = 0;
         for (node_id, from, _) in proposed {
             let Some(platform) = context.world.platform_mut(&node_id) else {
@@ -649,6 +650,12 @@ impl StageHandler for DeconflictStage {
                 event.resolution.as_str()
             ));
         }
+        for Shortfall { pair, apart_m } in &short {
+            context.note(format!(
+                "deconflict {} and {} have room for only {apart_m:.2} m of height between them",
+                pair[0], pair[1]
+            ));
+        }
         let ran = !events.is_empty();
         self.state.events = events;
         if moved > 0 && !ran {
@@ -660,6 +667,15 @@ impl StageHandler for DeconflictStage {
             Ok(StageOutcome::NoWork)
         }
     }
+}
+
+/// A conflicting pair with less room above and below than the vertical
+/// separation: between the ground and a wire.
+#[derive(Debug, Clone, PartialEq)]
+struct Shortfall {
+    pair: [String; 2],
+    /// The height between them once both have gone as far as they may.
+    apart_m: f64,
 }
 
 /// What a ramped stage checkpoints.
@@ -695,6 +711,7 @@ impl DeconflictStage {
     ) -> (
         std::collections::BTreeMap<String, [f64; 3]>,
         Vec<DeconflictionEvent>,
+        Vec<Shortfall>,
     ) {
         use argusnet_planning::deconfliction::{yielder, Resolution};
         let config = self.state.config;
@@ -773,10 +790,19 @@ impl DeconflictStage {
                 if reached != full {
                     // A wire leaves the yielder no more room: its peer goes
                     // the other way, as far as its own wires allow.
+                    let at = proposed[p].1;
                     let away = (reached - direction * config.vertical_separation_m)
                         .clamp(limits[p].0, limits[p].1);
-                    wanted.entry(proposed[p].0.clone()).or_insert([0.0; 3])[2] =
-                        away - proposed[p].1[2];
+                    // Nor lower over the ground than a yielder may be sent;
+                    // one already lower is not sent down at all.
+                    let away = if away < at[2] {
+                        roles
+                            .clamp([at[0], at[1]], away, config.min_agl_m)
+                            .map_or(away, |floor| away.max(floor).min(at[2]))
+                    } else {
+                        away
+                    };
+                    wanted.entry(proposed[p].0.clone()).or_insert([0.0; 3])[2] = away - at[2];
                 }
                 wanted.entry(proposed[y].0.clone()).or_insert([0.0; 3])[2] = reached - at[2];
                 changed = true;
@@ -794,7 +820,19 @@ impl DeconflictStage {
                 break;
             }
         }
-        (wanted, events)
+        // Between the ground and a wire there may not be the room: the pair
+        // is as far apart as there is, and said to be short of it.
+        let short = conflicts
+            .iter()
+            .filter_map(|&(i, j, _)| {
+                let apart = (height(&wanted, i) - height(&wanted, j)).abs();
+                (apart < config.vertical_separation_m - 1e-9).then(|| Shortfall {
+                    pair: [proposed[i].0.clone(), proposed[j].0.clone()],
+                    apart_m: apart,
+                })
+            })
+            .collect();
+        (wanted, events, short)
     }
 
     /// One resolution, applied whole: the reference's stage 3.
@@ -1793,7 +1831,7 @@ mod tests {
                 .into_iter()
                 .map(|(id, x, y)| (id.to_string(), [x, y, 100.0], toward(x, y)))
                 .collect();
-        let (wanted, events) =
+        let (wanted, events, _) =
             stage.vertical_separation(&proposed, &std::collections::BTreeMap::new(), 0.0);
         assert_eq!(events.len(), 3, "every pair conflicts in plan: {events:?}");
         let height = |k: usize| proposed[k].1[2] + wanted.get(&proposed[k].0).map_or(0.0, |o| o[2]);
@@ -1860,14 +1898,15 @@ mod tests {
             };
             let mut proposed = pair(62.0, 62.0);
             let none = std::collections::BTreeMap::new();
-            let (_, events) = stage.vertical_separation(&proposed, &none, 0.0);
+            let (_, events, _) = stage.vertical_separation(&proposed, &none, 0.0);
             // The yielder the lower of the two: asked down.
             let low = events[0].yielding_drone_id.clone();
             for (id, at, _) in &mut proposed {
                 at[2] = if *id == low { 62.0 } else { 64.0 };
             }
-            let (wanted, events) = stage.vertical_separation(&proposed, &none, 0.0);
+            let (wanted, events, short) = stage.vertical_separation(&proposed, &none, 0.0);
             assert_eq!(events.len(), 1);
+            assert_eq!(short, Vec::new());
             let height = |id: &str| {
                 let at = proposed.iter().find(|(node, ..)| node == id).unwrap().1[2];
                 at + wanted.get(id).map_or(0.0, |offset| offset[2])
@@ -1884,6 +1923,61 @@ mod tests {
             peer - low >= config.vertical_separation_m - 1e-9,
             "{peer} over {low}"
         );
+    }
+
+    /// Under a wire, over the ground: the yielder goes up to the wire's
+    /// ceiling, the peer down only to the height a yielder may be sent to,
+    /// and what is missing is said.
+    #[test]
+    fn a_peer_is_not_sent_below_its_floor_to_make_room_under_a_wire() {
+        #[derive(Debug)]
+        struct Flat;
+        impl crate::motion::TerrainSampler for Flat {
+            fn height_at(&self, _x_m: f64, _y_m: f64) -> f64 {
+                0.0
+            }
+            fn gradient_at(&self, _x_m: f64, _y_m: f64, _delta_m: Option<f64>) -> [f64; 2] {
+                [0.0, 0.0]
+            }
+            fn clamp_altitude(&self, _x_m: f64, _y_m: f64, z_m: f64, min_agl_m: f64) -> f64 {
+                z_m.max(min_agl_m)
+            }
+        }
+        let mut stage = DeconflictStage::new()
+            .with_roles(RoleTable::new().with_terrain(std::sync::Arc::new(Flat)));
+        stage.set_offset_ramp(Some(RAMP));
+        stage.set_separation_wires(Some(SeparationWires {
+            config: crate::belief_world::WirePlanningConfig::default(),
+            map: wire_map(),
+        }));
+        let config = stage.config();
+        let none = std::collections::BTreeMap::new();
+        let run = |peer_z: f64| {
+            let proposed: Vec<(String, [f64; 3], [f64; 3])> = [("a", 0.0), ("b", 4.0)]
+                .into_iter()
+                .map(|(id, y)| (id.to_string(), [-20.0, y, 24.0], [10.0, 0.0, 0.0]))
+                .collect();
+            let (_, events, _) = stage.vertical_separation(&proposed, &none, 0.0);
+            let peer = events[0].conflicting_drone_id.clone();
+            let proposed: Vec<_> = proposed
+                .into_iter()
+                .map(|(id, at, velocity)| {
+                    let z = if id == peer { peer_z } else { at[2] };
+                    (id, [at[0], at[1], z], velocity)
+                })
+                .collect();
+            let (wanted, _, short) = stage.vertical_separation(&proposed, &none, 0.0);
+            let offset = |id: &str| wanted.get(id).map_or(0.0, |offset| offset[2]);
+            let yielder = events[0].yielding_drone_id.clone();
+            (24.0 + offset(&yielder), peer_z + offset(&peer), short)
+        };
+        let (_, peer, short) = run(24.0);
+        assert_eq!(peer, config.min_agl_m, "down to the floor, no further");
+        assert_eq!(short.len(), 1, "{short:?}");
+        assert!(short[0].apart_m < config.vertical_separation_m);
+        // Already under its floor, it is not sent down, nor up at the other.
+        let (_, peer, _) = run(12.0);
+        assert_eq!(peer, 12.0);
     }
 
     /// The limits: over a wire ahead, a floor that is never above where the

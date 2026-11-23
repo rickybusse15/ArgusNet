@@ -206,7 +206,8 @@ things on `field_v2`.
   (`vertical_separation` in `deconflict.rs`) ran after the governor and knew no
   wires. It now takes a yielder no further than the wires believed ahead allow,
   looking as far as the governor does, and the peer makes up the rest the other
-  way; turning the yielder back would take it through the peer's height. Any
+  way, no lower over the ground than a yielder may be sent (with too little room
+  between ground and wire the pair is noted as short of it); turning the yielder back would take it through the peer's height. Any
   run with mission flights and wire planning gets it, `field_v1` included,
   whose 15 record seeds replay byte for byte as before.
 - **A strip between two lines was never worth its crossing.** A planned leg

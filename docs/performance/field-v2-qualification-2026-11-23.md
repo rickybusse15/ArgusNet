@@ -78,6 +78,8 @@ river, 14 power lines instead of one, and 55 m of relief instead of 39 m
 | West Pleasant View (this record) | 89417..99317; 9901..9905 | 15 of 15. Its third set was stopped before any seed was scored, when campaign 1 failed |
 
 The tuning seeds pass every gate on both sites; they are reported, not counted.
+Review then found separation's peer could be sent under its ground clearance
+beneath a wire; with that fixed, all 30 counted seeds replay byte for byte.
 What changed: [MAP_REPORT.md](../migration/MAP_REPORT.md),
 [WIRE_CORRIDORS.md](../migration/WIRE_CORRIDORS.md).
 

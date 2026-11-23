@@ -311,10 +311,17 @@ pub struct CellQuality {
     pub vertical_sigma_m: Option<f64>,
 }
 
-/// A plane's squared error at the centre of evenly sampled ground of constant
-/// curvature, over the variance that curvature leaves about the plane. Along
-/// one axis, `a u²` over a cell of side `L` has mean `a L²/12` (the plane's
-/// error at the centre) and variance `a² L⁴/180`: 180/144.
+/// A plane's squared error at a cell's centre, over the variance the ground's
+/// curvature leaves about the plane, for evenly spread returns and a claim of
+/// one sigma over curved ground of every shape.
+///
+/// Along one axis, `a u²` over a cell of side `L` has mean `a L²/12` (the
+/// plane's error at the centre) and variance `a² L⁴/180`: a ridge or a valley
+/// gives 180/144. The errors of two axes add and their variances add, so a
+/// bowl or a dome gives twice that and a saddle or a twist nothing: the
+/// residual does not say which it is. Over isotropic ground the mean is 0.90,
+/// so a ridge's is no understatement of it, and a bowl's own error is 1.4
+/// times the claim.
 pub const CURVATURE_VARIANCE: f64 = 1.25;
 
 /// One-sigma vertical uncertainty of a cell's height: the spread of its
@@ -566,33 +573,44 @@ mod tests {
         assert!(sigma > mean_sigma);
     }
 
-    /// A bowl sampled evenly: the plane reads its centre high, by what the
-    /// claim says, however many returns there are.
+    /// Curved ground sampled evenly: the plane reads its centre off by the
+    /// claim for a valley, 1.4 times it for a bowl and not at all for a saddle
+    /// or a twist, however many returns there are.
     #[test]
     fn curved_ground_is_claimed_for_and_does_not_average_away() {
+        type Shape = fn(f64, f64) -> f64;
+        let shapes: [(&str, Shape, f64); 5] = [
+            ("a valley", |u, _| u * u, 1.0),
+            ("a ridge", |_, v| -v * v, 1.0),
+            ("a bowl", |u, v| u * u + v * v, 2f64.sqrt()),
+            ("a saddle", |u, v| u * u - v * v, 0.0),
+            ("a twist", |u, v| u * v, 0.0),
+        ];
         for per_side in [8, 40] {
-            let (mut plane, mut sum, mut sq) = (PlaneMoments::default(), 0.0, 0.0);
-            for i in 0..per_side {
-                for j in 0..per_side {
-                    let at = |k: usize| 10.0 * ((k as f64 + 0.5) / per_side as f64 - 0.5);
-                    let z = 20.0 + 0.02 * at(i) * at(i);
-                    plane.add(at(i), at(j), z);
-                    sum += z;
-                    sq += z * z;
+            for (name, shape, errors_over_claim) in shapes {
+                let (mut plane, mut sum, mut sq) = (PlaneMoments::default(), 0.0, 0.0);
+                for i in 0..per_side {
+                    for j in 0..per_side {
+                        let at = |k: usize| 10.0 * ((k as f64 + 0.5) / per_side as f64 - 0.5);
+                        let z = 20.0 + 0.02 * shape(at(i), at(j));
+                        plane.add(at(i), at(j), z);
+                        sum += z;
+                        sq += z * z;
+                    }
                 }
+                let cell = CellEvidence {
+                    accepted_height_sum_m: sum,
+                    accepted_height_sq_sum_m2: sq,
+                    plane: Some(plane),
+                    ..evidence(per_side as u32 * per_side as u32, 0.0, 0.0)
+                };
+                let error = (centre_height_m(&cell).unwrap() - 20.0).abs();
+                let sigma = vertical_sigma_m(&cell, 0.0, 0.0).unwrap();
+                assert!(
+                    (error / sigma - errors_over_claim).abs() < 0.04,
+                    "{name}: {error} m against a claimed {sigma} m"
+                );
             }
-            let cell = CellEvidence {
-                accepted_height_sum_m: sum,
-                accepted_height_sq_sum_m2: sq,
-                plane: Some(plane),
-                ..evidence(per_side as u32 * per_side as u32, 0.0, 0.0)
-            };
-            let error = centre_height_m(&cell).unwrap() - 20.0;
-            let sigma = vertical_sigma_m(&cell, 0.0, 0.0).unwrap();
-            assert!(
-                (error / sigma - 1.0).abs() < 0.03,
-                "{error} m against a claimed {sigma} m"
-            );
         }
     }
 

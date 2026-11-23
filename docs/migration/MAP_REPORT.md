@@ -63,8 +63,11 @@ returns fell, and:
 - **Its claim is that plane's.** The scatter about the plane over what the fit
   leaves at the centre, and the ground that is no plane: what the returns
   scatter beyond their own noise, times 1.25 (180/144, the squared error of a
-  plane at the centre of evenly sampled constant curvature over the variance
-  it leaves). No count of returns reduces that part.
+  plane at the centre of an evenly sampled ridge or valley over the variance
+  it leaves). No count of returns reduces that part. The residual does not say
+  what shape it is: that ratio is 2.5 for a bowl or a dome, whose error is then
+  1.4 times the claim, nothing for a saddle or a twist, and 0.90 on the mean of
+  isotropic ground. 1.25 is for the mix, not the worst.
 - **A cell with no plane claims its spread whole**, or the relief its
   neighbours show if that is more: one return has no spread.
 - **A return's noise is the rig's own LiDAR's** (0.05 m), not the legacy
