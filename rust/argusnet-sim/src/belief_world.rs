@@ -156,6 +156,10 @@ pub struct ExplorationConfig {
     /// them straight, or round mapped wires in plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_3d: Option<argusnet_planning::route3d::Route3dConfig>,
+    /// Ask for views of each point, and go back for those missing (F7). Absent
+    /// asks for the dwell alone. Needs mission flights.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection_evidence: Option<crate::evidence::EvidenceConfig>,
     /// Go on mapping what falls short once the points are inspected. Needs a
     /// quality requirement. Absent goes home at once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -557,6 +561,7 @@ impl Default for ExplorationConfig {
             imaging: None,
             plane_heights: false,
             flown_handovers: false,
+            inspection_evidence: None,
             route_3d: None,
             follow_up: None,
             end_when_all_home: false,
@@ -679,6 +684,16 @@ impl ExplorationConfig {
         }
         if self.flown_handovers && self.mission_flights.is_none() {
             return Err("flown handovers are governed flights': they need mission flights".into());
+        }
+        if let Some(evidence) = &self.inspection_evidence {
+            if self.mission_flights.is_none() {
+                return Err(
+                    "inspection evidence is flown for over the believed surface: it needs \
+                     mission flights"
+                        .into(),
+                );
+            }
+            evidence.validate()?;
         }
         if let Some(route) = &self.route_3d {
             if self.mission_flights.is_none() {
@@ -3845,6 +3860,25 @@ impl PhysicalGuard {
         p[2] < TerrainSampler::height_at(&self.terrain, p[0], p[1])
             || self.obstacles.collides(p)
             || self.wires.iter().any(|wire| wire.contains(p))
+    }
+
+    /// Whether an image `node_id` takes where it believes it is would show
+    /// `point_m`: nothing of the world between where it is and there. The last
+    /// metre and a half is the thing itself.
+    pub fn sees(&self, node_id: &str, believed_m: [f64; 3], point_m: [f64; 3]) -> bool {
+        const OF_ITSELF_M: f64 = 1.5;
+        const STEP_M: f64 = 0.5;
+        let off = self.off_m(node_id, believed_m);
+        let from: [f64; 3] = std::array::from_fn(|k| believed_m[k] + off[k]);
+        let d: [f64; 3] = std::array::from_fn(|k| point_m[k] - from[k]);
+        let length = d.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let steps = ((length - OF_ITSELF_M) / STEP_M).floor().max(0.0) as usize;
+        (0..=steps).all(|k| {
+            let f = k as f64 * STEP_M / length.max(1e-9);
+            let p: [f64; 3] = std::array::from_fn(|a| from[a] + f * d[a]);
+            p[2] >= TerrainSampler::height_at(&self.terrain, p[0], p[1])
+                && !self.obstacles.collides(p)
+        })
     }
 
     fn floor_at(&self, p: [f64; 3]) -> f64 {

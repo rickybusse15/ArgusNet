@@ -266,6 +266,9 @@ struct DriverCheckpoint {
     /// Flying on for the map (`follow_up`). Absent until it starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     follow_up: Option<FollowUp>,
+    /// What has been seen of each point (F7). Absent until it is asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence: Option<crate::evidence::EvidenceState>,
     /// Its flights under way and the planning of them pending. Absent without
     /// replanning, and until a flight is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -442,6 +445,9 @@ pub struct MissionDriverStage {
     follow_up: Option<FollowUp>,
     /// What mission flights are routed through in three dimensions.
     route_air: Option<crate::route_air::RouteAir>,
+    /// What is asked of each point's views, and what asks it (F7).
+    evidence_config: Option<(crate::evidence::EvidenceConfig, crate::evidence::MapEyes)>,
+    evidence: crate::evidence::EvidenceState,
     /// Plans its flights again when the map closes their ways.
     rerouter: Option<crate::reroute::Rerouter>,
     /// Whether a scan with every drone homeward is over.
@@ -1242,6 +1248,8 @@ impl MissionDriverStage {
             follow_up_config: None,
             follow_up: None,
             route_air: None,
+            evidence_config: None,
+            evidence: Default::default(),
             rerouter: None,
             ends_when_all_home: false,
             gap_fill: BTreeMap::new(),
@@ -2647,6 +2655,145 @@ impl MissionDriverStage {
     /// tick.
     pub fn end_when_all_home(&mut self, ends: bool) {
         self.ends_when_all_home = ends;
+    }
+
+    /// Ask for views of each point once it is dwelt at. Before the first tick.
+    pub fn set_inspection_evidence(
+        &mut self,
+        evidence: Option<(crate::evidence::EvidenceConfig, crate::evidence::MapEyes)>,
+    ) {
+        self.evidence_config = evidence;
+    }
+
+    /// What has been seen of each point, where it is asked.
+    pub fn inspection_evidence(&self) -> Option<&crate::evidence::EvidenceState> {
+        self.evidence_config.as_ref().map(|_| &self.evidence)
+    }
+
+    /// Whether the fleet stays out for views of its points, every dwell done.
+    fn goes_back_for_views(&mut self, timestamp_s: f64, mobile: &[(String, [f64; 3])]) -> bool {
+        use crate::evidence::Action;
+        let Some((config, eyes)) = self.evidence_config.clone() else {
+            return false;
+        };
+        let points: Vec<(String, [f64; 3])> = self
+            .pois
+            .statuses()
+            .iter()
+            .filter(|status| status.state == PoiState::Complete)
+            .filter_map(|status| {
+                let poi = self
+                    .initial_pois
+                    .iter()
+                    .find(|poi| poi.poi_id == status.poi_id)?;
+                // The map it stands on goes on changing; its views are of one
+                // thing, as it was first asked about.
+                let subject_m = self.evidence.points.get(&poi.poi_id).map_or_else(
+                    || eyes.subject_m([poi.position[0], poi.position[1]]),
+                    |point| point.subject_m,
+                );
+                Some((poi.poi_id.clone(), subject_m))
+            })
+            .collect();
+        let working: Vec<(String, [f64; 3])> = mobile
+            .iter()
+            .filter(|(id, _)| !self.homeward.contains(id))
+            .cloned()
+            .collect();
+        let mut evidence = std::mem::take(&mut self.evidence);
+        let actions = evidence.run(&config, timestamp_s, &points, &working, &eyes);
+        let open = evidence.is_open();
+        self.evidence = evidence;
+        for action in actions {
+            match action {
+                Action::Go {
+                    drone_id,
+                    poi_id,
+                    viewpoint_m,
+                    azimuth_deg,
+                } => {
+                    let at = mobile
+                        .iter()
+                        .find(|(id, _)| *id == drone_id)
+                        .map(|(_, at)| *at)
+                        .expect("a working drone is there");
+                    let flight = self.flight(at, viewpoint_m, timestamp_s);
+                    let mut inputs = serde_json::json!({
+                        "position_m": at,
+                        "viewpoint_m": viewpoint_m,
+                        "azimuth_deg": azimuth_deg,
+                        "views": self.evidence.points[&poi_id].views.len(),
+                        "views_asked": config.min_views,
+                    });
+                    flight.record(&mut inputs);
+                    self.override_commands
+                        .push(OverrideCommand::SetPoi(drone_id.clone(), flight.trajectory));
+                    self.decisions.push(Decision {
+                        kind: "evidence_revisit",
+                        status: DecisionStatus::QueuedForNextTick,
+                        subject: Some(drone_id.clone()),
+                        selected: Some(poi_id.clone()),
+                        candidates: Vec::new(),
+                        reason: "views_missing",
+                        detail: format!(
+                            "{drone_id} goes to see {poi_id} from {azimuth_deg:.0} degrees round"
+                        ),
+                        inputs,
+                        command: Some("set_poi"),
+                    });
+                }
+                Action::Release { drone_id } => {
+                    self.override_commands
+                        .push(OverrideCommand::ClearPoi(drone_id));
+                }
+                Action::Viewed {
+                    drone_id,
+                    poi_id,
+                    azimuth_deg,
+                    shown,
+                } => self.decisions.push(Decision {
+                    kind: "evidence_view",
+                    status: if shown {
+                        DecisionStatus::Applied
+                    } else {
+                        DecisionStatus::Rejected
+                    },
+                    subject: Some(drone_id),
+                    selected: Some(poi_id),
+                    candidates: Vec::new(),
+                    reason: if shown { "view_taken" } else { "not_shown" },
+                    detail: format!("a view from {azimuth_deg:.0} degrees round"),
+                    inputs: serde_json::json!({ "azimuth_deg": azimuth_deg }),
+                    command: None,
+                }),
+                Action::Settled {
+                    poi_id,
+                    verdict,
+                    views,
+                } => self.decisions.push(Decision {
+                    kind: "evidence_settled",
+                    status: if verdict == crate::evidence::Verdict::Met {
+                        DecisionStatus::Applied
+                    } else {
+                        DecisionStatus::Rejected
+                    },
+                    subject: None,
+                    selected: Some(poi_id),
+                    candidates: Vec::new(),
+                    reason: match verdict {
+                        crate::evidence::Verdict::Met => "met",
+                        crate::evidence::Verdict::NoViewpoint => "no_viewpoint",
+                        crate::evidence::Verdict::TriesSpent => "tries_spent",
+                        crate::evidence::Verdict::TimeSpent => "time_spent",
+                        crate::evidence::Verdict::FleetHomeward => "fleet_homeward",
+                    },
+                    detail: format!("{views} of {} views", config.min_views),
+                    inputs: serde_json::json!({ "views": views, "views_asked": config.min_views }),
+                    command: None,
+                }),
+            }
+        }
+        open
     }
 
     /// Whether the fleet stays out for the map, its points inspected: what
@@ -4079,8 +4226,15 @@ impl StageHandler for MissionDriverStage {
         }
         // The map's own account of what falls short is followed up before the
         // fleet goes home.
+        let for_views = phase == MissionPhase::Inspecting
+            && all_pois_complete
+            && self.goes_back_for_views(timestamp_s, &mobile);
+        if self.evidence_config.is_some() {
+            gate_inputs["views_open"] = serde_json::json!(for_views);
+        }
         let following_up = phase == MissionPhase::Inspecting
             && all_pois_complete
+            && !for_views
             && self.follows_up(
                 timestamp_s,
                 &mobile,
@@ -4092,7 +4246,7 @@ impl StageHandler for MissionDriverStage {
         if self.follow_up_config.is_some() {
             gate_inputs["following_up"] = serde_json::json!(following_up);
         }
-        let all_pois_complete = all_pois_complete && !following_up;
+        let all_pois_complete = all_pois_complete && !for_views && !following_up;
         // With every drone homeward for good nothing more will be scanned.
         let scan_over = self.ends_when_all_home
             && matches!(phase, MissionPhase::Scanning | MissionPhase::Localizing)
@@ -4264,6 +4418,7 @@ impl StageHandler for MissionDriverStage {
             mapped_fit: self.mapped_fit,
             unassigned: self.unassigned.clone(),
             follow_up: self.follow_up.clone(),
+            evidence: (!self.evidence.points.is_empty()).then(|| self.evidence.clone()),
             reroute: self.rerouter.as_ref().and_then(|r| r.state()),
         };
         Some(serde_json::to_value(state).expect("mission driver state serialises"))
@@ -4322,6 +4477,7 @@ impl StageHandler for MissionDriverStage {
         self.mapped_fit = decoded.mapped_fit;
         self.unassigned = decoded.unassigned;
         self.follow_up = decoded.follow_up;
+        self.evidence = decoded.evidence.unwrap_or_default();
         if let Some(rerouter) = &mut self.rerouter {
             rerouter.reset();
             if let Some(state) = decoded.reroute {
@@ -4382,6 +4538,7 @@ impl StageHandler for MissionDriverStage {
         self.mapped_wires = 0;
         self.mapped_fit = 0;
         self.follow_up = None;
+        self.evidence = Default::default();
         if let Some(rerouter) = &mut self.rerouter {
             rerouter.reset();
         }

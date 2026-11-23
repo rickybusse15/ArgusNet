@@ -10,6 +10,7 @@
 use argusnet_planning::route3d::ReplanConfig;
 use argusnet_sim::belief_world::{FollowUpConfig, LostPositionConfig};
 use argusnet_sim::compute::ComputePool;
+use argusnet_sim::evidence::EvidenceConfig;
 use argusnet_sim::faults::{Fault, FaultManifest, MANIFEST_FORMAT, MANIFEST_VERSION};
 use argusnet_sim::mission_driver::{MissionDriverStage, SensorLost};
 use argusnet_sim::navigation::NavigationConfig;
@@ -518,4 +519,76 @@ fn flights_planned_again_do_not_depend_on_who_plans_them() {
         stepped.step().unwrap();
     }
     assert!(!pending_at.is_empty(), "a flight was planned again");
+}
+
+/// Every point dwelt at is settled on its views, met or short with a reason,
+/// before the fleet goes home; and a run stopped on the way to a viewpoint goes on
+/// as it would have.
+#[test]
+fn points_are_settled_on_their_views_before_the_fleet_goes_home() {
+    let mut options = whole_mission(None, None);
+    let exploration = options.exploration.as_mut().unwrap();
+    exploration.follow_up = None;
+    let without = replay(&options);
+    assert!(without.0.get("inspection_evidence").is_none());
+    options.exploration.as_mut().unwrap().inspection_evidence = Some(EvidenceConfig {
+        max_s: 100.0,
+        ..EvidenceConfig::default()
+    });
+    let (meta, frames) = replay(&options);
+    assert_eq!(phase(frames.last().unwrap()), "complete");
+    assert_eq!(contacts(&frames), 0);
+    let points = meta["inspection_evidence"].as_object().unwrap();
+    let asked = frames.last().unwrap()["scan_mission_state"]["poi_statuses"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(points.len(), asked);
+    let mut met = 0;
+    for (id, point) in points {
+        let views = point["views"].as_array().unwrap();
+        let verdict = point["verdict"].as_str().expect("settled");
+        assert_eq!(verdict == "met", views.len() >= 3, "{id}: {point}");
+        met += usize::from(verdict == "met");
+        for view in views {
+            let range = view["range_m"].as_f64().unwrap();
+            let elevation = view["elevation_deg"].as_f64().unwrap();
+            assert!(
+                range <= 60.0 && (15.0..=75.0).contains(&elevation),
+                "{view}"
+            );
+        }
+    }
+    assert!(met > 0, "{points:?}");
+
+    let first = {
+        let mut run = run_with(&options);
+        (0..bundle().steps)
+            .find(|_| {
+                run.step().unwrap();
+                let driver = run
+                    .sim
+                    .stage_mut::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+                    .expect("a mission driver");
+                driver
+                    .inspection_evidence()
+                    .is_some_and(|evidence| !evidence.tours.is_empty())
+            })
+            .expect("a drone goes back")
+    };
+    for at in [first as usize + 3, first as usize + 20] {
+        let mut original = run_with(&options);
+        for _ in 0..at {
+            original.step().unwrap();
+        }
+        let text = serde_json::to_string(&original.sim.checkpoint().unwrap()).unwrap();
+        let checkpoint: SimulationCheckpoint = serde_json::from_str(&text).unwrap();
+        let mut resumed = run_with(&options);
+        resumed.restore(&checkpoint).expect("restore accepted");
+        for (k, frame) in frames.iter().enumerate().skip(at) {
+            resumed.step().unwrap();
+            let now = serde_json::to_value(resumed.last_frame().unwrap()).unwrap();
+            assert_eq!(&now, frame, "resumed at {at}, tick {k}");
+        }
+    }
 }

@@ -291,6 +291,12 @@ impl RunOptions {
             if replans(self) != replans(&profile.options()) {
                 id.push_str("+replan");
             }
+            fn views(options: &RunOptions) -> Option<&crate::evidence::EvidenceConfig> {
+                options.exploration.as_ref()?.inspection_evidence.as_ref()
+            }
+            if views(self) != views(&profile.options()) {
+                id.push_str("+evidence");
+            }
             run.extend_replay_meta([("run_profile".to_string(), serde_json::json!({ "id": id }))]);
         }
         if let Some(threshold) = self.scan_coverage_threshold {

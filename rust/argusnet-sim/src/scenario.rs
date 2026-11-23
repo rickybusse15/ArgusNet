@@ -2226,6 +2226,7 @@ impl AssembledRun {
         let flown_handovers = config.flown_handovers;
         let wire_planning = wire_planning_config;
         let governed_map = handle.clone();
+        let (evidence_map, evidence_world) = (handle.clone(), guard.clone());
         let (route_map, route_wires) = (handle.clone(), wire_planning.clone());
         let separation_wires =
             wire_planning
@@ -2260,6 +2261,22 @@ impl AssembledRun {
             driver.set_fault_return(config.fault_return.clone());
             driver.set_flown_positions(flown_positions.clone());
             driver.set_follow_up(config.follow_up.clone());
+            driver.set_inspection_evidence(
+                config
+                    .inspection_evidence
+                    .clone()
+                    .zip(mission_flights.as_ref())
+                    .map(|(evidence, flights)| {
+                        (
+                            evidence,
+                            crate::evidence::MapEyes {
+                                map: evidence_map,
+                                clearance_m: flights.clearance_m,
+                                world: evidence_world,
+                            },
+                        )
+                    }),
+            );
             driver.set_route_air(config.route_3d.clone().zip(mission_flights.clone()).map(
                 |(config, surface)| crate::route_air::RouteAir {
                     config,
@@ -3210,6 +3227,15 @@ impl AssembledRun {
             let document = serde_json::to_value(&report).expect("a report serialises");
             self.replay
                 .extend_meta([("map_report".to_string(), document)]);
+        }
+        let evidence = self
+            .sim
+            .stage::<MissionDriverStage>(Stage::EvaluateMissionTransitions)
+            .and_then(|driver| driver.inspection_evidence())
+            .map(|evidence| serde_json::to_value(&evidence.points).expect("evidence serialises"));
+        if let Some(points) = evidence {
+            self.replay
+                .extend_meta([("inspection_evidence".to_string(), points)]);
         }
         Ok(self.replay.finish())
     }
