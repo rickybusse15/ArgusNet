@@ -21,6 +21,9 @@ model. The space is asked for one column at a time, as the search reaches it:
   ground leaves `min_agl_m`. Wires are kept 10 m further off than flights keep
   them (`wire_margin_m`), since a mapped wire is a fit.
 
+A leg is tested every quarter cell in plan and every half layer in height, and across
+no closed band between two samples, so a steep one does not step over a wire.
+
 Within 40 m of either end only wires close the air: a pad and a point are the
 end's own business, and a drone comes down over its end and does not circle down to
 it. The way found is pulled straight wherever a straight leg is open, gentle
@@ -73,7 +76,7 @@ passed at 12.7 and 16.5 m, governed but close; they are 23.7 and 20.0 m.
 
 ## Tests
 
-`route3d.rs` (10): over, round and under; a pad under the floor; coming down over
+`route3d.rs` (11): over, round and under; a wire not stepped over by a steep leg; a pad under the floor; coming down over
 the end; what it costs; nothing found; determinism. `route_air.rs`: a structure
 gone round and a wire kept 20 m off on a self-built map. `tests/field_v3.rs`: less
 energy, no contacts and exact resume on the fixture.

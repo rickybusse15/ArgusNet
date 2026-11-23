@@ -35,6 +35,13 @@ impl Column {
                 .closed_m
                 .is_some_and(|[low, high]| z_m > low + 1e-9 && z_m < high - 1e-9)
     }
+
+    /// Whether going from one height to the other here passes through what is
+    /// closed, whole.
+    fn crosses(&self, a_m: f64, b_m: f64) -> bool {
+        self.closed_m
+            .is_some_and(|[low, high]| a_m.min(b_m) <= low + 1e-9 && a_m.max(b_m) >= high - 1e-9)
+    }
 }
 
 /// What is known of the air over a place.
@@ -188,16 +195,61 @@ impl<A: Airspace> Search<'_, A> {
         column
     }
 
-    /// Whether a straight leg is open all along.
+    /// Whether a straight leg is open all along: in plan every quarter cell, in
+    /// height every half layer, and across no closed band between.
     fn open(&mut self, from: [f64; 3], to: [f64; 3]) -> bool {
-        let length = (to[0] - from[0]).hypot(to[1] - from[1]);
-        let steps = (length / (0.25 * self.config.cell_m)).ceil().max(1.0) as usize;
+        let steps = self.samples(from, to, 0.25 * self.config.cell_m);
+        let mut last: Option<(f64, Column)> = None;
         (0..=steps).all(|k| {
             let f = k as f64 / steps as f64;
             let at: [f64; 3] = std::array::from_fn(|a| from[a] + f * (to[a] - from[a]));
             let i = ((at[0] - self.start[0]) / self.config.cell_m).round() as i32;
             let j = ((at[1] - self.start[1]) / self.config.cell_m).round() as i32;
-            self.column(i, j).is_some_and(|column| column.allows(at[2]))
+            let Some(column) = self.column(i, j) else {
+                return false;
+            };
+            let open = column.allows(at[2])
+                && last.is_none_or(|(z_m, before)| {
+                    !column.crosses(z_m, at[2]) && !before.crosses(z_m, at[2])
+                });
+            last = Some((at[2], column));
+            open
+        })
+    }
+
+    /// How many samples a leg takes, no further apart than `plan_m` in plan or
+    /// half a layer in height.
+    fn samples(&self, from: [f64; 3], to: [f64; 3], plan_m: f64) -> usize {
+        let length = (to[0] - from[0]).hypot(to[1] - from[1]);
+        let rise = (to[2] - from[2]).abs();
+        (length / plan_m)
+            .max(rise / (0.5 * self.config.layer_m))
+            .ceil()
+            .max(1.0) as usize
+    }
+
+    /// Whether the straight flight is steep enough to pass from one side of a
+    /// wire to the other over one place.
+    fn drops_through_a_wire(&self) -> bool {
+        let (from, to) = (self.start, self.goal);
+        let steps = self.samples(from, to, 0.5 * self.config.cell_m);
+        let raised = |k: usize| {
+            let f = k as f64 / steps as f64;
+            let at: [f64; 3] = std::array::from_fn(|a| from[a] + f * (to[a] - from[a]));
+            let column = self.air.column([at[0], at[1]], 0.0);
+            let z_m = match column {
+                Some(column) if !column.allows(at[2]) => {
+                    column.closed_m.map_or(at[2], |[_, high]| at[2].max(high))
+                }
+                _ => at[2],
+            };
+            (z_m, column)
+        };
+        (1..=steps).any(|k| {
+            let ((a_m, before), (b_m, here)) = (raised(k - 1), raised(k));
+            [before, here]
+                .iter()
+                .all(|column| column.is_some_and(|column| column.crosses(a_m, b_m)))
         })
     }
 
@@ -207,6 +259,10 @@ impl<A: Airspace> Search<'_, A> {
     fn direct_wh(&self, battery: &BatteryModel) -> (f64, bool) {
         let (from, to) = (self.start, self.goal);
         let length = (to[0] - from[0]).hypot(to[1] - from[1]);
+        // Down through a wire, over the one place, there is no climbing over it.
+        if self.drops_through_a_wire() {
+            return (f64::INFINITY, true);
+        }
         let step_m = 0.5 * self.config.cell_m;
         let steps = (length / step_m).ceil().max(1.0) as usize;
         let mut wire = false;
@@ -587,6 +643,48 @@ mod tests {
         let found = route(&over);
         flies_clear(&over, &found);
         assert!(found.corners_m.iter().any(|c| c[2] >= 120.0), "{found:?}");
+    }
+
+    /// Straight down, or steeply, through a wire: every sample is clear of it
+    /// and the way is not. Round it, to the far side and under.
+    #[test]
+    fn a_wire_is_not_stepped_over_by_a_steep_leg() {
+        let wire = world(vec![], vec![[-30.0, 30.0, -1000.0, 1000.0, 35.0, 65.0]]);
+        let config = Route3dConfig::default();
+        for (start, goal) in [
+            ([0.0, 0.0, 100.0], [0.0, 0.0, 10.0]),
+            ([0.0, 0.0, 10.0], [0.0, 0.0, 100.0]),
+            ([-2.0, 0.0, 100.0], [2.0, 1.0, 12.0]),
+            ([20.0, 0.0, 70.0], [0.0, 0.0, 30.0]),
+        ] {
+            match plan(&wire, &battery(), start, goal, &config) {
+                Plan3d::Route(route) => {
+                    assert!(route.meets_wire);
+                    let mut points = vec![start];
+                    points.extend(&route.corners_m);
+                    points.push(goal);
+                    for leg in points.windows(2) {
+                        for k in 0..=400 {
+                            let f = f64::from(k) / 400.0;
+                            let at: [f64; 3] =
+                                std::array::from_fn(|a| leg[0][a] + f * (leg[1][a] - leg[0][a]));
+                            let column = wire.column([at[0], at[1]], 0.0).unwrap();
+                            assert!(column.allows(at[2]), "{at:?} of {route:?}");
+                        }
+                    }
+                }
+                other => panic!("{start:?} to {goal:?}: {other:?}"),
+            }
+        }
+        // Clear of it, straight down is straight down.
+        let clear = plan(
+            &wire,
+            &battery(),
+            [200.0, 0.0, 100.0],
+            [200.0, 0.0, 10.0],
+            &config,
+        );
+        assert_eq!(clear, Plan3d::Straight);
     }
 
     #[test]
