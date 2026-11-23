@@ -292,12 +292,13 @@ it ends where it is allowed to), and the closest approach to a conductor
 Bounded causal jobs and restore with pending jobs (P4.10d–e) are not part of
 this.
 
-## Field profile v2 (in progress, not qualified)
+## Field profile v2
 
-`--profile field_v2` is `field_v1` plus what later slices add. It has its own
-draft thresholds (`docs/contracts/field_v2.thresholds.json`, a copy of v1's
-until they are frozen) and no qualification campaign yet: the figures below
-are from tuning seeds and count for nothing.
+`--profile field_v2` is `field_v1` plus what later slices add. **Qualified on
+West Pleasant View: 15 of 15 unseen seeds pass every gate**
+([record](../performance/field-v2-qualification-2026-11-22.md)), against
+`docs/contracts/field_v2.thresholds.json`: `field_v1`'s gates unchanged, and
+three on the map's own claims and its images. The tables below are tuning seeds.
 
 **View planning (SR5d, [VIEW_PLANNING.md](VIEW_PLANNING.md)).** Explorers
 cruise to the deficit worth most per watt-hour, costed with the run's battery
@@ -329,19 +330,19 @@ and every cell is asked for an image of 4 cm a pixel or finer. The whole flight
 comes down to meet it, from 148 m over the ground to about 124 m. The table
 above is view planning alone; with both, on the same seeds, every gate passes:
 
-| Seed | Mission complete, s (v1 → v2) | Cells meeting it, images included | Structure recall (v1 → v2) |
+| Seed | Mission complete, s (v1 → v2) | Cells meeting it, images included | Structure recall |
 | --- | --- | --- | --- |
-| 7 | 358 → 396 | 0.905 | 0.979 → 0.998 |
-| 42 | 376 → 406 | 0.902 | 0.946 → 0.979 |
-| 707 | 530 → 455 | 0.917 | – → 0.997 |
-| 1010 | 371 → 416 | 0.904 | – → 0.992 |
-| 4451 | 421 → 421 | 0.907 | 0.983 → 0.977 |
-| 9002 | 352 → 423 | 0.908 | – → 0.992 |
-| 9005 | 355 → 435 | 0.915 | – → 0.994 |
-| 13127 | 397 → 428 | 0.911 | – → 0.991 |
+| 7 | 358 → 381 | 0.903 | 0.996 |
+| 42 | 376 → 405 | 0.902 | 0.979 |
+| 707 | 530 → 492 | 0.920 | 0.989 |
+| 1010 | 371 → 423 | 0.917 | 0.997 |
+| 4451 | 421 → 391 | 0.907 | 0.994 |
+| 9002 | 352 → 400 | 0.908 | 0.986 |
+| 9005 | 355 → 426 | 0.905 | 0.995 |
+| 13127 | 397 → 445 | 0.908 | 0.979 |
 
 The images cost what view planning saved, and somewhat more: the median mission
-is 422 s against v1's 374 s.
+is 414 s against v1's 374 s.
 
 **Map report ([MAP_REPORT.md](MAP_REPORT.md)).** The replay carries what the map
 was asked for against what it achieved.
@@ -368,7 +369,7 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 - The map requirement's vertical sigma is still judged from the returns'
   own spread and a declared bias; nothing yet compares predicted against
   achieved quality on a run (the sensing guide's SR5d).
-- No pointing arbiter, no view planning (`field_v2` adds it, unqualified),
+- No pointing arbiter, no view planning (`field_v2` adds it),
   and no return home as a fault response (`field_v2` adds it; a lost navigation camera is answered with a braked hold, a
   jammed gimbal with fixed pointing).
 - No landing: home is a hover at the station.
