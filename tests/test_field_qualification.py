@@ -279,3 +279,28 @@ def test_the_maps_report_is_measured_when_the_replay_has_one():
     # A replay without one is unknown, not zero: a gate on it fails.
     replay["meta"] = {}
     assert measure(replay)["map_error_over_claim"] is None
+
+
+def test_position_errors_are_judged_by_the_sigma_claimed_for_their_axis():
+    def frame(error, horizontal, vertical):
+        return {
+            "timestamp_s": 0.0,
+            "nodes": [{"node_id": "d", "position": [10.0, 20.0, 30.0], "is_mobile": True}],
+            "navigation": [
+                {
+                    "node_id": "d",
+                    "position_m": [10.0 + error[0], 20.0 + error[1], 30.0 + error[2]],
+                    "horizontal_sigma_m": horizontal,
+                    "vertical_sigma_m": vertical,
+                }
+            ],
+        }
+
+    # x inside, y outside, z inside; then all inside.
+    frames = [frame((1.0, -2.5, 0.3), 1.0, 0.2), frame((0.0, 0.0, 0.0), 1.0, 0.2)]
+    measured = measure({"meta": {}, "frames": frames})
+    assert measured["position_within_2_sigma"] == pytest.approx(5 / 6)
+    # Without navigation there is nothing to judge, and the gate cannot pass.
+    for item in frames:
+        del item["navigation"]
+    assert measure({"meta": {}, "frames": frames})["position_within_2_sigma"] is None

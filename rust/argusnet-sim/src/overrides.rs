@@ -1021,7 +1021,15 @@ impl StageHandler for MissionOverrideStage {
             }
         }
         let rejoining = self.state.rejoining.keys().cloned().collect();
-        let camera_out = &self.state.camera_out;
+        // What sends a platform to a hold: its navigation camera out, or not
+        // knowing where it is.
+        let mut holding = governor.lost(
+            context
+                .world
+                .mobile_platforms()
+                .map(|platform| platform.node_id.as_str()),
+        );
+        holding.extend(self.state.camera_out.iter().cloned());
         // Those flying home: the last table to name a platform flies it.
         let mut returning = std::collections::BTreeSet::new();
         for (node_id, source) in &self.state.applied {
@@ -1031,11 +1039,10 @@ impl StageHandler for MissionOverrideStage {
                 returning.remove(node_id);
             }
         }
-        let (held, waited) = governor.govern(
-            context, guard, &missions, &rejoining, camera_out, &returning,
-        );
+        let (held, waited) =
+            governor.govern(context, guard, &missions, &rejoining, &holding, &returning);
         // A rejoin the governor held goes on from where it holds.
-        for node_id in camera_out {
+        for node_id in &holding {
             if let (Some(at), Some(platform)) = (
                 self.state.rejoining.get_mut(node_id),
                 context.world.platform_mut(node_id),

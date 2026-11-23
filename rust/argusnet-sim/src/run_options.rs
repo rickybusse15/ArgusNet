@@ -80,6 +80,9 @@ pub const FIELD_V1_QUALITY: argusnet_mapping::quality::QualityRequirement =
 /// The coarsest image `field_v2` accepts of a cell, metres a pixel.
 pub const FIELD_V2_IMAGE_GSD_M: f64 = 0.04;
 
+/// How well `field_v3` asks a cell's returns to be placed, one sigma, metres.
+pub const FIELD_V3_HORIZONTAL_SIGMA_M: f64 = 0.5;
+
 /// The share of the map's reachable cells that must meet
 /// [`FIELD_V1_QUALITY`] before `field_v1`'s scan ends.
 pub const FIELD_V1_SCAN_THRESHOLD: f64 = 0.9;
@@ -131,15 +134,25 @@ pub enum RunProfile {
     /// Its replay carries the map's report. A drone whose navigation camera
     /// or mapping payload stays out goes home (F2).
     FieldV2,
+    /// [`RunProfile::FieldV2`] on a survey-grade receiver's estimated
+    /// positions, with a requirement on where the map's cells are; a drone
+    /// that does not know where it is holds, and goes home if that lasts;
+    /// and separation over the believed surface.
+    FieldV3,
 }
 
 impl RunProfile {
-    pub const ALL: [RunProfile; 2] = [RunProfile::FieldV1, RunProfile::FieldV2];
+    pub const ALL: [RunProfile; 3] = [
+        RunProfile::FieldV1,
+        RunProfile::FieldV2,
+        RunProfile::FieldV3,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             RunProfile::FieldV1 => "field_v1",
             RunProfile::FieldV2 => "field_v2",
+            RunProfile::FieldV3 => "field_v3",
         }
     }
 
@@ -160,6 +173,7 @@ impl RunProfile {
         match self {
             RunProfile::FieldV1 => RunOptions::field_v1(),
             RunProfile::FieldV2 => RunOptions::field_v2(),
+            RunProfile::FieldV3 => RunOptions::field_v3(),
         }
     }
 }
@@ -232,18 +246,34 @@ impl RunOptions {
         options
     }
 
+    /// [`RunProfile::FieldV3`]'s options: `field_v2`, and what it adds.
+    pub fn field_v3() -> Self {
+        let mut options = Self::field_v2();
+        let exploration = options.exploration.as_mut().expect("field_v2 explores");
+        exploration.navigation = Some(crate::navigation::NavigationConfig::rtk());
+        if let Some(quality) = &mut exploration.quality {
+            quality.max_horizontal_sigma_m = Some(FIELD_V3_HORIZONTAL_SIGMA_M);
+        }
+        if let Some(fault_return) = &mut exploration.fault_return {
+            fault_return.lost_position = Some(crate::belief_world::LostPositionConfig::default());
+        }
+        exploration.separation_surface = true;
+        options.profile = Some(RunProfile::FieldV3);
+        options
+    }
+
     /// Install the options on `run`, assembled from `bundle`, and record what
     /// was installed in the replay's metadata (`energy_profile`,
     /// `delivery_profile`; the fault manifest records itself). Faults go last:
     /// link faults are validated against the delivery profile.
     pub fn apply(&self, run: &mut AssembledRun, bundle: &ScenarioBundle) -> Result<(), String> {
         if let Some(profile) = self.profile {
-            // Navigation is no profile's: with it, the run is not the profile
-            // and does not say it is.
-            let navigation = self
-                .exploration
-                .as_ref()
-                .is_some_and(|exploration| exploration.navigation.is_some());
+            // With other navigation than the profile's own, the run is not
+            // the profile and does not say it is.
+            fn of(options: &RunOptions) -> Option<&crate::navigation::NavigationConfig> {
+                options.exploration.as_ref()?.navigation.as_ref()
+            }
+            let navigation = of(self) != of(&profile.options());
             let id = if navigation {
                 format!("{}+navigation", profile.as_str())
             } else {

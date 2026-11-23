@@ -166,6 +166,8 @@ struct Flown {
     offset: FlownOffset,
     /// Its `[horizontal, vertical]` one sigma, metres.
     sigma_m: [f64; 2],
+    /// Seconds since its last fix.
+    fix_age_s: f64,
 }
 
 /// How many sigma an aircraft keeps clear by.
@@ -210,18 +212,32 @@ impl FlownPositions {
         std::array::from_fn(|k| (CLEAR_SIGMAS * sigma[k]).min(MAX_MARGIN_M[k]))
     }
 
-    fn set(&self, node_id: &str, offset: FlownOffset, sigma_m: [f64; 2]) {
-        self.0
-            .write()
-            .expect("offsets lock")
-            .insert(node_id.to_string(), Flown { offset, sigma_m });
+    /// Whether `node_id` knows where it is, sideways, to no better than
+    /// `sigma_m`, and how long since its last fix if so.
+    pub fn lost_for_s(&self, node_id: &str, sigma_m: f64) -> Option<f64> {
+        let flown = self.0.read().expect("offsets lock");
+        flown
+            .get(node_id)
+            .filter(|flown| flown.sigma_m[0] > sigma_m)
+            .map(|flown| flown.fix_age_s)
+    }
+
+    fn set(&self, node_id: &str, offset: FlownOffset, sigma_m: [f64; 2], fix_age_s: f64) {
+        self.0.write().expect("offsets lock").insert(
+            node_id.to_string(),
+            Flown {
+                offset,
+                sigma_m,
+                fix_age_s,
+            },
+        );
     }
 
     /// `node_id` this far off wherever it believes it is, its pad far away.
     #[cfg(test)]
     pub(crate) fn always_unsure(node_id: &str, sigma_m: [f64; 2]) -> Self {
         let positions = Self::default();
-        positions.set(node_id, FlownOffset::default(), sigma_m);
+        positions.set(node_id, FlownOffset::default(), sigma_m, 0.0);
         positions
     }
 
@@ -235,6 +251,7 @@ impl FlownPositions {
                 pad_m: [1.0e9, 1.0e9, 0.0],
             },
             [0.0; 2],
+            0.0,
         );
         positions
     }
@@ -459,9 +476,13 @@ impl Navigation {
             return;
         };
         let sigmas = sigmas_of(filter);
+        let fix_age_s = aircraft
+            .last_fix_s
+            .map_or(0.0, |at| aircraft.timestamp_s - at);
         let (Some(rate), Some(flown)) = (self.config.correction_mps, aircraft.flown.as_mut())
         else {
-            self.flown.set(node_id, FlownOffset::default(), sigmas);
+            self.flown
+                .set(node_id, FlownOffset::default(), sigmas, fix_age_s);
             return;
         };
         let estimate = filter.position_m();
@@ -476,7 +497,7 @@ impl Navigation {
         for (held, step) in flown.offset_m.iter_mut().zip(step) {
             *held += step * share;
         }
-        self.flown.set(node_id, *flown, sigmas);
+        self.flown.set(node_id, *flown, sigmas, fix_age_s);
     }
 
     pub fn state(&self) -> &NavigationState {
@@ -489,7 +510,11 @@ impl Navigation {
         for (node_id, aircraft) in &self.state.aircraft {
             if let Some(filter) = &aircraft.filter {
                 let offset = aircraft.flown.unwrap_or_default();
-                self.flown.set(node_id, offset, sigmas_of(filter));
+                let fix_age_s = aircraft
+                    .last_fix_s
+                    .map_or(0.0, |at| aircraft.timestamp_s - at);
+                self.flown
+                    .set(node_id, offset, sigmas_of(filter), fix_age_s);
             }
         }
     }
@@ -939,6 +964,7 @@ mod tests {
                 pad_m: [100.0, 100.0, 10.0],
             },
             [3.0, 0.5],
+            0.0,
         );
         assert_eq!(flown.margin_m("drone"), [6.0, 1.0]);
         assert_eq!(flown.margin_m("other"), [0.0; 2]);

@@ -68,7 +68,14 @@ pub struct WireGovernor {
     blind_speed_mps: Option<f64>,
     /// How much wider each aircraft keeps clear for not knowing where it is.
     flown: Option<crate::navigation::FlownPositions>,
+    /// The horizontal one sigma past which a platform is lost and holds;
+    /// `None` flies on, however lost.
+    lost_sigma_m: Option<f64>,
 }
+
+/// How much faster than its controller asks a platform let go from a hold is
+/// flown until it has caught up with where its controller has it.
+const RELEASE_CATCH_UP: f64 = 1.25;
 
 impl WireGovernor {
     pub fn new(config: WirePlanningConfig, map: BeliefHandle) -> Self {
@@ -91,7 +98,26 @@ impl WireGovernor {
             hold_braking_mps2: None,
             blind_speed_mps: None,
             flown: None,
+            lost_sigma_m: None,
         }
+    }
+
+    /// Hold a platform whose position is worse known than this, as one whose
+    /// navigation camera is out is.
+    pub fn with_lost_hold(mut self, sigma_m: Option<f64>) -> Self {
+        self.lost_sigma_m = sigma_m;
+        self
+    }
+
+    /// The platforms lost now, of those that hold when they are.
+    pub fn lost<'a>(&self, nodes: impl Iterator<Item = &'a str>) -> BTreeSet<String> {
+        let Some((flown, sigma_m)) = self.flown.as_ref().zip(self.lost_sigma_m) else {
+            return BTreeSet::new();
+        };
+        nodes
+            .filter(|node| flown.lost_for_s(node, sigma_m).is_some())
+            .map(str::to_string)
+            .collect()
     }
 
     /// Brake a platform whose navigation camera is out at `braking_mps2`.
@@ -421,6 +447,25 @@ impl WireGovernor {
                     }
                 }
                 braking_step_m = Some(allowed.min(step));
+            } else if let (Some(_), None, Some(speed_mps)) = (
+                flown.braking_step_m,
+                mission,
+                context.world.platform(&node_id).map(|platform| {
+                    let v = &platform.velocity;
+                    v.x.hypot(v.y)
+                }),
+            ) {
+                // Let go: its controller ran on while it held, and it is
+                // flown there, not put there.
+                let [fx, fy, _] = flown.position_m;
+                let (dx, dy) = (position[0] - fx, position[1] - fy);
+                let (step, allowed) = (dx.hypot(dy), RELEASE_CATCH_UP * speed_mps * dt_s);
+                if step > allowed {
+                    let scale = allowed / step;
+                    position[0] = fx + dx * scale;
+                    position[1] = fy + dy * scale;
+                    braking_step_m = Some(allowed);
+                }
             }
             if let Some(guard) = guard {
                 if mission.is_some() {

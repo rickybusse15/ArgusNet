@@ -313,6 +313,8 @@ fn fitted_shape(wires: &[PowerLine]) -> u64 {
 pub enum SensorLost {
     NavCamera,
     MappingPayload,
+    /// It does not know where it is.
+    Position,
 }
 
 /// What each drone reports of its own sensors: how long each has been out,
@@ -418,6 +420,8 @@ pub struct MissionDriverStage {
     fault_return: Option<crate::belief_world::FaultReturnConfig>,
     /// What the drones report of their sensors.
     sensors_out: SensorsOut,
+    /// How well each drone knows where it is, for what a lost one does.
+    flown: Option<crate::navigation::FlownPositions>,
     /// Drones sweeping a hole in the coverage map under efficient_v1 (P4),
     /// with the cells they sweep.
     gap_fill: BTreeMap<String, GapFill>,
@@ -1210,6 +1214,7 @@ impl MissionDriverStage {
             homeward_faults: BTreeMap::new(),
             fault_return: None,
             sensors_out: SensorsOut::default(),
+            flown: None,
             gap_fill: BTreeMap::new(),
             rescored: false,
             coordinator: None,
@@ -2414,12 +2419,24 @@ impl MissionDriverStage {
                     .filter(|&for_s| for_s + 1e-9 >= limit_s)
             };
             // The camera first: it is the one that keeps the drone off things.
-            let lost = long(&self.sensors_out.nav_camera, config.camera_hold_s)
-                .map(|for_s| (SensorLost::NavCamera, for_s))
-                .or_else(|| {
-                    long(&self.sensors_out.mapping_payload, config.payload_out_s)
-                        .map(|for_s| (SensorLost::MappingPayload, for_s))
-                });
+            let lost = config
+                .lost_position
+                .as_ref()
+                .zip(self.flown.as_ref())
+                .and_then(|(lost, flown)| {
+                    flown
+                        .lost_for_s(id, lost.hold_sigma_m)
+                        .filter(|&for_s| for_s + 1e-9 >= lost.home_after_s)
+                })
+                .map(|for_s| (SensorLost::Position, for_s));
+            let lost = lost.or_else(|| {
+                long(&self.sensors_out.nav_camera, config.camera_hold_s)
+                    .map(|for_s| (SensorLost::NavCamera, for_s))
+                    .or_else(|| {
+                        long(&self.sensors_out.mapping_payload, config.payload_out_s)
+                            .map(|for_s| (SensorLost::MappingPayload, for_s))
+                    })
+            });
             let Some((lost, for_s)) = lost else {
                 continue;
             };
@@ -2438,6 +2455,7 @@ impl MissionDriverStage {
             let (reason, sensor) = match lost {
                 SensorLost::NavCamera => ("nav_camera_lost", "navigation camera"),
                 SensorLost::MappingPayload => ("mapping_payload_lost", "mapping payload"),
+                SensorLost::Position => ("position_lost", "position fix"),
             };
             self.decisions.push(Decision {
                 kind: "return_home",
@@ -2457,6 +2475,11 @@ impl MissionDriverStage {
     /// first tick.
     pub fn set_fault_return(&mut self, config: Option<crate::belief_world::FaultReturnConfig>) {
         self.fault_return = config;
+    }
+
+    /// How well each drone knows where it is. Before the first tick.
+    pub fn set_flown_positions(&mut self, flown: Option<crate::navigation::FlownPositions>) {
+        self.flown = flown;
     }
 
     /// What the drones report of their sensors from now on (F2).
@@ -2497,6 +2520,7 @@ impl MissionDriverStage {
                     match self.homeward_faults.get(id) {
                         Some(SensorLost::NavCamera) => "with no navigation camera",
                         Some(SensorLost::MappingPayload) => "with no mapping payload",
+                        Some(SensorLost::Position) => "with no position fix",
                         None => "reserve",
                     }
                 ),

@@ -1,0 +1,92 @@
+{
+  "format": "argusnet.profile-thresholds",
+  "version": 1,
+  "profile": "field_v3",
+  "frozen": "2026-11-23",
+  "basis": "field_v2's gates, unchanged, and what field_v3 adds, as the user set them: the profile's own map requirement asks for cells placed to 0.5 m one sigma, so quality_met_fraction gates it, and position_within_2_sigma. Declared before the first field_v3 qualification seed was run. The seven seeds field_v3 is composed on (7, 42, 707, 1010, 4451, 9002, 13127, on both sites) are tuning seeds and are never counted.",
+  "per_run": {
+    "mission_complete": {
+      "equals": true,
+      "why": "The mission reaches its complete phase inside the run."
+    },
+    "pois_complete_fraction": {
+      "min": 1.0,
+      "why": "Every inspection point is dwelt at for its required time."
+    },
+    "drones_home": {
+      "equals": true,
+      "why": "Every drone is within the egress radius of its station at the end and has not left it since the mission completed."
+    },
+    "home_radius_m": {
+      "max": 15.0,
+      "why": "The scenario's egress arrival radius."
+    },
+    "world_contacts": {
+      "max": 0,
+      "why": "The physical guard never had to stop or move a platform: nothing was flown into."
+    },
+    "known_fraction": {
+      "min": 0.9,
+      "why": "Share of map cells measured."
+    },
+    "quality_met_fraction": {
+      "min": 0.9,
+      "why": "Share of map cells meeting the profile's declared map requirement, its 4 cm image and 0.5 m horizontal one sigma included; the scan gate itself."
+    },
+    "structure_recall": {
+      "min": 0.9,
+      "why": "Share of true structure cells the map believes occupied."
+    },
+    "structure_precision": {
+      "min": 0.9,
+      "why": "Share of believed structure cells that are true structure."
+    },
+    "ground_rmse_m": {
+      "max": 1.0,
+      "why": "Measured ground against the true ground, over known cells."
+    },
+    "map_error_over_claim": {
+      "max": 1.5,
+      "why": "RMS of the map's true error over the sigma it claims (meta.map_report): a map that claims much more than it knows cannot be planned on."
+    },
+    "map_error_within_2_sigma": {
+      "min": 0.88,
+      "why": "Share of cells whose true error is within two of their claimed sigma."
+    },
+    "position_within_2_sigma": {
+      "min": 0.88,
+      "why": "Share of aircraft position errors, axis by axis and tick by tick, within two of the sigma the navigation claims for that axis."
+    },
+    "image_gsd_p90_m": {
+      "max": 0.04,
+      "why": "Nine in ten imaged cells have an image as fine as the requirement."
+    },
+    "wire_clearance_min_m": {
+      "min": 10.0,
+      "why": "Closest any drone came to a true conductor; the line's own declared clearance. Not applicable in a world without power lines."
+    },
+    "drone_separation_min_m": {
+      "min": 16.0,
+      "why": "Closest any two drones came to each other; the separation deconfliction is configured to keep. Not applicable to a single drone."
+    },
+    "energy_reserve_margin_min_wh": {
+      "min": 0.0,
+      "why": "No drone's remaining energy fell below its reserve at any tick."
+    },
+    "max_step_m": {
+      "max": 12.0,
+      "why": "No platform moves further in one 0.25 s tick than the redirect speed and climb rate allow: nothing is put somewhere, everything is flown there."
+    },
+    "repeat_identical": {
+      "equals": true,
+      "why": "The same seed and config give the same replay bytes."
+    }
+  },
+  "campaign": {
+    "min_pass_fraction": 1.0,
+    "min_qualification_seeds": 10,
+    "min_heldout_seeds": 5,
+    "why": "Every qualification and held-out seed passes every per-run gate. A gate with no value in the replay fails: an unknown requirement cannot pass."
+  },
+  "amendments": []
+}

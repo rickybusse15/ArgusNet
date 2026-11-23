@@ -146,6 +146,10 @@ pub struct ExplorationConfig {
     /// requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub plane_heights: bool,
+    /// Send no drone, for another's sake, into what the map believes stands
+    /// there, as none is sent into a wire. Absent looks at the ground alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub separation_surface: bool,
     /// Write the map's report ([`crate::map_report`]) into the replay's
     /// `meta.map_report` when the run ends. Needs a quality requirement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -202,8 +206,34 @@ pub struct FaultReturnConfig {
     /// home, seconds.
     pub payload_out_s: f64,
     /// How fast a drone with no navigation camera flies home over the
-    /// believed surface, m/s.
+    /// believed surface, m/s. One that is lost flies home as fast.
     pub blind_speed_mps: f64,
+    /// What a drone that does not know where it is does; absent flies on.
+    /// Needs navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lost_position: Option<LostPositionConfig>,
+}
+
+/// What a drone that does not know where it is does: it holds where it
+/// believes it is, above what may be there, and goes on when it knows again.
+/// Out too long, it flies home as best it can, for good.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LostPositionConfig {
+    /// The horizontal one sigma past which it is lost, metres.
+    pub hold_sigma_m: f64,
+    /// Seconds since its last fix after which a lost drone goes home.
+    pub home_after_s: f64,
+}
+
+impl Default for LostPositionConfig {
+    fn default() -> Self {
+        Self {
+            // Half a cell: past it a capture is refused, so flying on maps
+            // nothing.
+            hold_sigma_m: 5.0,
+            home_after_s: 240.0,
+        }
+    }
 }
 
 impl Default for FaultReturnConfig {
@@ -212,6 +242,7 @@ impl Default for FaultReturnConfig {
             camera_hold_s: 10.0,
             payload_out_s: 60.0,
             blind_speed_mps: 6.0,
+            lost_position: None,
         }
     }
 }
@@ -225,6 +256,16 @@ impl FaultReturnConfig {
         ] {
             if !(value.is_finite() && value >= least) {
                 return Err(format!("fault return {name} cannot be {value}"));
+            }
+        }
+        if let Some(lost) = &self.lost_position {
+            for (name, value) in [
+                ("hold_sigma_m", lost.hold_sigma_m),
+                ("home_after_s", lost.home_after_s),
+            ] {
+                if !(value.is_finite() && value > 0.0) {
+                    return Err(format!("lost position {name} cannot be {value}"));
+                }
             }
         }
         Ok(())
@@ -453,6 +494,7 @@ impl Default for ExplorationConfig {
             view_planning: None,
             imaging: None,
             plane_heights: false,
+            separation_surface: false,
             navigation: None,
             map_report: false,
             fault_return: None,
@@ -556,6 +598,26 @@ impl ExplorationConfig {
                 );
             }
             fault_return.validate()?;
+            if fault_return.lost_position.is_some() {
+                if self.navigation.is_none() {
+                    return Err("a lost position needs navigation to lose one".into());
+                }
+                if self.nav_camera.is_none() && self.rig.is_none() {
+                    return Err(
+                        "a lost drone brakes to a hold at its navigation camera's declared \
+                         deceleration: it needs one"
+                            .into(),
+                    );
+                }
+            }
+        }
+        if self.separation_surface
+            && (self.wire_planning.is_none() || self.mission_flights.is_none())
+        {
+            return Err(
+                "separation over the believed surface needs wire planning and mission flights"
+                    .into(),
+            );
         }
         if self.plane_heights && self.quality.is_none() {
             return Err(
