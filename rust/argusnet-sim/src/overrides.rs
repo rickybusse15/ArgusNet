@@ -1022,7 +1022,18 @@ impl StageHandler for MissionOverrideStage {
         }
         let rejoining = self.state.rejoining.keys().cloned().collect();
         let camera_out = &self.state.camera_out;
-        let (held, waited) = governor.govern(context, guard, &missions, &rejoining, camera_out);
+        // Those flying home: the last table to name a platform flies it.
+        let mut returning = std::collections::BTreeSet::new();
+        for (node_id, source) in &self.state.applied {
+            if *source == OverrideSource::Egress {
+                returning.insert(node_id.clone());
+            } else {
+                returning.remove(node_id);
+            }
+        }
+        let (held, waited) = governor.govern(
+            context, guard, &missions, &rejoining, camera_out, &returning,
+        );
         // A rejoin the governor held goes on from where it holds.
         for node_id in camera_out {
             if let (Some(at), Some(platform)) = (

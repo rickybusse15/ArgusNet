@@ -343,6 +343,13 @@ above is view planning alone; with both, on the same seeds, every gate passes:
 The images cost what view planning saved, and somewhat more: the median mission
 is 422 s against v1's 374 s.
 
+**Map report ([MAP_REPORT.md](MAP_REPORT.md)).** The replay carries what the map
+was asked for against what it achieved.
+
+**Return home on a lost sensor ([FAILURE_SCENARIOS.md](FAILURE_SCENARIOS.md)).**
+A navigation camera out for 10 s or a mapping payload out for 60 s sends its
+drone home for good. An unfaulted run is unchanged by it.
+
 `field_v1` itself is unchanged: its West Pleasant View replay is
 byte-identical to the build before, and the canonical replays are 14 of 14.
 
@@ -362,6 +369,6 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
   own spread and a declared bias; nothing yet compares predicted against
   achieved quality on a run (the sensing guide's SR5d).
 - No pointing arbiter, no view planning (`field_v2` adds it, unqualified),
-  and no return home as a fault response (a lost navigation camera is answered with a braked hold, a
+  and no return home as a fault response (`field_v2` adds it; a lost navigation camera is answered with a braked hold, a
   jammed gimbal with fixed pointing).
 - No landing: home is a hover at the station.

@@ -64,6 +64,8 @@ pub struct WireGovernor {
     /// The deceleration a platform whose navigation camera is out brakes at
     /// to a hold in plan (F2); `None` without a camera.
     hold_braking_mps2: Option<f64>,
+    /// How fast such a platform flies home (F2); `None` holds it.
+    blind_speed_mps: Option<f64>,
 }
 
 impl WireGovernor {
@@ -85,12 +87,20 @@ impl WireGovernor {
             state: BTreeMap::new(),
             held: BTreeSet::new(),
             hold_braking_mps2: None,
+            blind_speed_mps: None,
         }
     }
 
     /// Brake a platform whose navigation camera is out at `braking_mps2`.
     pub fn with_hold_braking(mut self, braking_mps2: Option<f64>) -> Self {
         self.hold_braking_mps2 = braking_mps2;
+        self
+    }
+
+    /// Fly a platform whose navigation camera is out home at
+    /// `blind_speed_mps`, in place of holding it.
+    pub fn with_blind_speed(mut self, blind_speed_mps: Option<f64>) -> Self {
+        self.blind_speed_mps = blind_speed_mps;
         self
     }
 
@@ -273,6 +283,7 @@ impl WireGovernor {
         missions: &BTreeMap<String, [f64; 2]>,
         rejoining: &BTreeSet<String>,
         camera_out: &BTreeSet<String>,
+        returning: &BTreeSet<String>,
     ) -> (usize, Vec<String>) {
         let dt_s = context.dt_s;
         let timestamp_s = context.timestamp_s;
@@ -338,7 +349,18 @@ impl WireGovernor {
                         .get(&node_id)
                         .map_or(0.0, |_| (position[0] - fx).hypot(position[1] - fy))
                 });
-                let allowed = (last - braking * dt_s * dt_s).max(0.0);
+                // On its way home it goes on at the blind speed, over what
+                // the map believes; otherwise it stops.
+                let blind = self
+                    .blind_speed_mps
+                    .filter(|_| returning.contains(&node_id))
+                    .map_or(0.0, |speed| speed * dt_s);
+                let change = braking * dt_s * dt_s;
+                let allowed = if last > blind {
+                    (last - change).max(blind)
+                } else {
+                    (last + change).min(blind)
+                };
                 let (dx, dy) = (position[0] - fx, position[1] - fy);
                 let step = dx.hypot(dy);
                 if step > allowed {

@@ -365,6 +365,17 @@ impl FaultSchedule {
             .collect()
     }
 
+    /// How long each node's navigation camera has been out at `tick`, in
+    /// ticks, counting back through outages that follow on from each other.
+    pub fn camera_out_for(&self, tick: u64) -> BTreeMap<String, u64> {
+        out_for(&self.camera_outages, tick)
+    }
+
+    /// How long each node's mapping payload has been out at `tick`, in ticks.
+    pub fn mapping_out_for(&self, tick: u64) -> BTreeMap<String, u64> {
+        out_for(&self.mapping_outages, tick)
+    }
+
     /// Whether the manifest jams any gimbal.
     pub fn has_gimbal_jams(&self) -> bool {
         !self.gimbal_jams.is_empty()
@@ -389,9 +400,48 @@ impl FaultSchedule {
     }
 }
 
+/// Each node out at `tick` under `outages`, and for how many ticks: a pure
+/// function of the tick, so a resumed run needs no record of when it began.
+fn out_for(outages: &[(String, u64, u64)], tick: u64) -> BTreeMap<String, u64> {
+    let mut out = BTreeMap::new();
+    for (node, start, end) in outages {
+        if !(*start..*end).contains(&tick) {
+            continue;
+        }
+        let mut since = *start;
+        while let Some(earlier) = outages
+            .iter()
+            .filter(|(other, s, e)| other == node && *s < since && *e >= since)
+            .map(|(_, s, _)| *s)
+            .min()
+        {
+            since = earlier;
+        }
+        let ticks = out.entry(node.clone()).or_insert(0);
+        *ticks = (*ticks).max(tick - since);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_outage_is_timed_from_where_it_began() {
+        let outage = |node: &str, start, end| (node.to_string(), start, end);
+        let outages = [
+            outage("a", 20, 30),
+            outage("a", 30, 40),
+            outage("b", 5, 25),
+            outage("a", 10, 12),
+        ];
+        assert!(out_for(&outages, 4).is_empty());
+        assert_eq!(out_for(&outages, 24)["b"], 19);
+        assert_eq!(out_for(&outages, 35)["a"], 15, "one following another");
+        assert_eq!(out_for(&outages, 11)["a"], 1, "not one long over");
+        assert!(!out_for(&outages, 25).contains_key("b"));
+    }
 
     fn manifest(faults: Vec<Fault>) -> FaultManifest {
         FaultManifest {
