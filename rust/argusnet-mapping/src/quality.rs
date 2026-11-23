@@ -366,9 +366,49 @@ pub struct PoseEvidence {
     /// How steep the ground is here, rise over run: what a return in the
     /// wrong place does to the height.
     pub slope: f64,
-    /// The best `[vertical, horizontal]` one sigma any aircraft is placing
-    /// returns by now; `None` when none is.
-    pub best_now_m: Option<[f64; 2]>,
+    /// How well the aircraft mapping now place returns.
+    pub now: PosesNow,
+}
+
+/// The `[vertical, horizontal]` one sigmas aircraft place returns by now, of
+/// those no other is better than in both: which of them could repair a cell
+/// depends on what it is asked and on its slope. Best vertical first.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PosesNow {
+    poses: [[f64; 2]; PosesNow::MOST],
+    len: usize,
+}
+
+impl PosesNow {
+    /// The most kept. Past it, the middle of the range is left out.
+    pub const MOST: usize = 8;
+
+    pub fn of(poses: impl IntoIterator<Item = [f64; 2]>) -> Self {
+        let mut all: Vec<[f64; 2]> = poses.into_iter().collect();
+        all.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+        // Each worse in height must be better in plan to be kept.
+        let mut front: Vec<[f64; 2]> = Vec::new();
+        for pose in all {
+            if front.last().is_none_or(|last| pose[1] < last[1]) {
+                front.push(pose);
+            }
+        }
+        if front.len() > Self::MOST {
+            let last = front[front.len() - 1];
+            front.truncate(Self::MOST - 1);
+            front.push(last);
+        }
+        let mut now = Self::default();
+        for pose in front {
+            now.poses[now.len] = pose;
+            now.len += 1;
+        }
+        now
+    }
+
+    pub fn poses(&self) -> &[[f64; 2]] {
+        &self.poses[..self.len]
+    }
 }
 
 impl PoseEvidence {
@@ -544,11 +584,15 @@ pub fn assess(
         DeficitReason::ImageLimited
     } else if let Some(pose) = pose_short {
         // A revisit helps only if some aircraft now knows better.
-        match pose.best_now_m {
-            Some(best) if requirement.pose_falls_short(best, pose.slope) => {
-                DeficitReason::PoseLimited
-            }
-            _ => DeficitReason::PoseUncertain,
+        let now = pose.now.poses();
+        if !now.is_empty()
+            && now
+                .iter()
+                .all(|pose_now| requirement.pose_falls_short(*pose_now, pose.slope))
+        {
+            DeficitReason::PoseLimited
+        } else {
+            DeficitReason::PoseUncertain
         }
     } else if requirement
         .min_ground_density_per_m2
@@ -1046,16 +1090,47 @@ mod tests {
     }
 
     #[test]
+    fn only_poses_no_other_beats_in_both_are_kept() {
+        let now = PosesNow::of([[0.3, 0.1], [0.1, 0.5], [0.2, 0.6], [0.1, 0.4], [0.4, 0.1]]);
+        assert_eq!(now.poses(), [[0.1, 0.4], [0.3, 0.1]]);
+        let many = PosesNow::of((0..20).map(|k| [f64::from(k), f64::from(20 - k)]));
+        assert_eq!(many.poses().len(), PosesNow::MOST);
+        assert_eq!(many.poses()[0], [0.0, 20.0]);
+        assert_eq!(
+            many.poses()[PosesNow::MOST - 1],
+            [19.0, 1.0],
+            "best in plan"
+        );
+    }
+
+    #[test]
     fn a_badly_placed_cell_is_worth_a_revisit_only_by_a_better_pose() {
         let r = requirement();
         let reason = |best| {
             let mut e = posed(50, 0.8, 0.5, 0.0);
-            e.pose.as_mut().unwrap().best_now_m = best;
+            e.pose.as_mut().unwrap().now = PosesNow::of(best);
             assess(&e, 100.0, 0.3, None, &r).reason
         };
         assert_eq!(reason(Some([0.02, 0.02])), DeficitReason::PoseUncertain);
         assert_eq!(reason(Some([0.6, 0.4])), DeficitReason::PoseLimited);
         assert_eq!(reason(None), DeficitReason::PoseUncertain);
+        // One aircraft knows its height best and another where it is: the
+        // second is the one that can repair what is asked of both.
+        let both = QualityRequirement {
+            max_horizontal_sigma_m: Some(0.5),
+            ..r
+        };
+        let of = |now: &[[f64; 2]]| {
+            let mut e = posed(50, 0.01, 2.0, 0.0);
+            e.pose.as_mut().unwrap().now = PosesNow::of(now.iter().copied());
+            assess(&e, 100.0, 0.3, None, &both).reason
+        };
+        let (level, placed) = ([0.01, 2.0], [0.02, 0.01]);
+        assert_eq!(of(&[level, placed]), DeficitReason::PoseUncertain);
+        assert_eq!(of(&[placed, level]), DeficitReason::PoseUncertain);
+        assert_eq!(of(&[level]), DeficitReason::PoseLimited);
+        // Good enough in each, but no one aircraft in both.
+        assert_eq!(of(&[level, [0.9, 0.01]]), DeficitReason::PoseLimited);
         assert!(DeficitReason::PoseUncertain.is_improvable());
         assert!(!DeficitReason::PoseLimited.is_improvable());
         // Horizontally, only when the requirement asks.
