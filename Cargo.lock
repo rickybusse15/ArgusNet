@@ -426,6 +426,7 @@ dependencies = [
  "argusnet-sensing",
  "argusnet-types",
  "argusnet-world",
+ "blake2",
  "chrono",
  "libm",
  "rand_chacha",

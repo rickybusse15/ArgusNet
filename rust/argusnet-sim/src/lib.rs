@@ -48,6 +48,7 @@ pub mod scene_build;
 pub mod scene_export;
 pub mod scheduler;
 pub mod simulation;
+pub mod site_memory;
 pub mod snapshot;
 pub mod stage;
 pub mod timing;

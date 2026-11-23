@@ -2066,6 +2066,12 @@ impl BeliefGrid {
 
     /// Cells believed occupied by a structure, at `threshold`.
     /// Whether cell `(i, j)` is believed occupied at `threshold`.
+    /// The top of the structure returns in a cell, if there were any.
+    pub fn structure_top_ij(&self, i: usize, j: usize) -> Option<f64> {
+        let k = j * self.nx + i;
+        (self.structure_count[k] > 0).then(|| self.structure_top_m[k])
+    }
+
     pub fn is_structure_ij(&self, i: usize, j: usize, threshold: f64) -> bool {
         let k = j * self.nx + i;
         self.structure_count[k] > 0 && probability(self.log_odds[k]) >= threshold

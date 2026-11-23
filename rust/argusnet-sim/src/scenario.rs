@@ -3214,6 +3214,55 @@ impl AssembledRun {
         Ok(self.replay.finish())
     }
 
+    /// The map as a site's memory keeps it (F6). `None` without a quality
+    /// requirement: without one the map claims nothing of what it knows.
+    pub fn site_cells(
+        &self,
+    ) -> Option<(
+        crate::site_memory::SiteGrid,
+        Vec<crate::site_memory::SiteCell>,
+    )> {
+        use argusnet_mapping::quality::{assess, centre_height_m};
+        let mapping = self.mapping()?;
+        let (grid, config) = (mapping.belief_grid()?, mapping.exploration_config()?);
+        let requirement = config.quality.as_ref()?;
+        let (nx, ny) = grid.dimensions();
+        let resolution_m = grid.resolution_m();
+        let cells = grid
+            .all_evidence(grid.quality_tick()?, self.dt_s)
+            .iter()
+            .enumerate()
+            .map(|(k, evidence)| {
+                let quality = assess(
+                    evidence,
+                    resolution_m * resolution_m,
+                    config.per_return_sigma_m(),
+                    grid.finest_image_gsd_m(),
+                    requirement,
+                );
+                let (i, j) = (k % nx, k / nx);
+                crate::site_memory::SiteCell {
+                    ground_m: centre_height_m(evidence),
+                    sigma_m: quality.vertical_sigma_m,
+                    placed_sigma_m: quality.horizontal_sigma_m,
+                    structure_top_m: grid
+                        .structure_top_ij(i, j)
+                        .filter(|_| grid.is_structure_ij(i, j, config.occupied_probability)),
+                    returns: evidence.accepted_returns,
+                }
+            })
+            .collect();
+        Some((
+            crate::site_memory::SiteGrid {
+                origin_m: grid.origin_m(),
+                resolution_m,
+                nx,
+                ny,
+            },
+            cells,
+        ))
+    }
+
     /// What the map was asked for against what it holds now. `None` without
     /// a quality requirement.
     pub fn map_report(&self) -> Option<crate::map_report::MapReport> {

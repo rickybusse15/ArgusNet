@@ -2,6 +2,9 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Site memory (F6, first slice): `sim --site-memory DIR --site ID` keeps each mission's
+  map as a revision and says what changed since the last, `argusnet-rs site` reads it
+  (`docs/migration/SITE_MEMORY.md`).
 - Python inventory (P6.0, `docs/migration/PYTHON_INVENTORY.md`): the empty stubs are
   gone, and every analysis module imports first and without the native library.
 - Planning jobs (P4.10d, P4.10e first slices): bounded work applied at a declared
