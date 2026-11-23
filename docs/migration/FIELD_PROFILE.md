@@ -392,7 +392,9 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 
 - the map requirement asks for cells placed to 0.5 m one sigma;
 - a drone that does not know where it is holds, and goes home if that lasts;
-- separation over the believed surface.
+- separation over the believed surface;
+- the fleet follows up on the map before it goes home, and a scan with every drone
+  home ends ([MAP_REPORT.md](MAP_REPORT.md)).
 
 Limits: [field_v3.thresholds.json](../contracts/field_v3.thresholds.json),
 `field_v2`'s unchanged and `position_within_2_sigma`. The tuning seeds pass every

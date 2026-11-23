@@ -826,22 +826,41 @@ mod tests {
     /// without GNSS.
     fn mean_nees(config: &NavigationConfig, ticks: u64, out: Option<u64>) -> f64 {
         let runs = 400u32;
-        let total: f64 = (0..runs)
-            .map(|seed| {
-                let mut navigation = Navigation::new(config.clone(), seed).unwrap();
-                let split = out.unwrap_or(ticks);
-                run(&mut navigation, "drone", 0..split);
-                navigation.set_gnss_out(BTreeSet::from(["drone".to_string()]));
-                run(&mut navigation, "drone", split..ticks);
-                let aircraft = &navigation.state.aircraft["drone"];
-                aircraft
-                    .filter
-                    .as_ref()
-                    .unwrap()
-                    .position_nees(aircraft.position_m)
-                    .unwrap()
-            })
-            .sum();
+        let nees = |seed: u32| {
+            let mut navigation = Navigation::new(config.clone(), seed).unwrap();
+            let split = out.unwrap_or(ticks);
+            run(&mut navigation, "drone", 0..split);
+            navigation.set_gnss_out(BTreeSet::from(["drone".to_string()]));
+            run(&mut navigation, "drone", split..ticks);
+            let aircraft = &navigation.state.aircraft["drone"];
+            aircraft
+                .filter
+                .as_ref()
+                .unwrap()
+                .position_nees(aircraft.position_m)
+                .unwrap()
+        };
+        // On every core, in seed order: a debug build takes minutes on one.
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get() as u32);
+        let mut values: Vec<(u32, f64)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|worker| {
+                    let nees = &nees;
+                    scope.spawn(move || {
+                        (worker..runs)
+                            .step_by(workers as usize)
+                            .map(|seed| (seed, nees(seed)))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| handle.join().unwrap())
+                .collect()
+        });
+        values.sort_by_key(|(seed, _)| *seed);
+        let total: f64 = values.iter().map(|(_, nees)| nees).sum();
         total / f64::from(runs)
     }
 

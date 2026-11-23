@@ -162,6 +162,9 @@ pub struct MissionInputs {
     pub localizer_timed_out: bool,
     /// `POIManager.all_complete`.
     pub all_pois_complete: bool,
+    /// Every drone is homeward for good, so nothing more will be scanned:
+    /// the scan is over, short of its gate. Never in the reference.
+    pub scan_over: bool,
     /// Distance to home per mobile platform, in platform order. `None` where
     /// no home was recorded — which the reference counts as arrived.
     pub home_distances_m: Vec<Option<f64>>,
@@ -178,6 +181,7 @@ impl MissionInputs {
             localization_confidences: Vec::new(),
             localizer_timed_out: false,
             all_pois_complete: false,
+            scan_over: false,
             home_distances_m: Vec::new(),
         }
     }
@@ -335,6 +339,9 @@ impl MissionState {
         config: &MissionConfig,
         inputs: &MissionInputs,
     ) -> Option<MissionPhase> {
+        if inputs.scan_over {
+            return Some(MissionPhase::Inspecting);
+        }
         if inputs.coverage_fraction < config.scan_coverage_threshold {
             return None;
         }
@@ -363,6 +370,9 @@ impl MissionState {
     ) -> Option<MissionPhase> {
         if inputs.fleet_is_empty() {
             return None;
+        }
+        if inputs.scan_over {
+            return Some(MissionPhase::Inspecting);
         }
         self.confidences_converged(config, inputs)
             .then_some(MissionPhase::Inspecting)
@@ -613,6 +623,7 @@ mod tests {
             localization_confidences: vec![confidence; n],
             localizer_timed_out: false,
             all_pois_complete: false,
+            scan_over: false,
             home_distances_m: vec![Some(1_000.0); n],
         }
     }

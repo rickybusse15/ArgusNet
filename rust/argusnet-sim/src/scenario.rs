@@ -2256,6 +2256,8 @@ impl AssembledRun {
             }
             driver.set_fault_return(config.fault_return.clone());
             driver.set_flown_positions(flown_positions.clone());
+            driver.set_follow_up(config.follow_up.clone());
+            driver.end_when_all_home(config.end_when_all_home);
             if let Some(flights) = &mission_flights {
                 // Each POI's height over the ground: declared by the
                 // scenario, else recovered from its absolute height and the

@@ -86,7 +86,9 @@ constants are the geometry's and the sensor's: none was set from these numbers.
 
 ## What it does not do
 
-- Nothing replans on it: it is written when the run ends.
+- The report itself is written when the run ends. What it would name as left to
+  fix is followed up in flight (below), from the map and not from the report's
+  evaluation parts, which read the true world.
 - `predicted` is flat ground, nadir, one pass. It is not a coverage plan.
 - A cell's error is its height less the true ground at its centre. Without
   plane heights that includes where in the cell the returns fell.
@@ -95,6 +97,41 @@ constants are the geometry's and the sensor's: none was set from these numbers.
   scatter that much.
 - The true platform pose still places every return: no part of the claim is a
   position error, and none of the measured error is.
+
+## Followed up in flight (`follow_up`, on in `field_v3`)
+
+The scan ends at its gate, 0.9 of the map. Once every point is inspected the
+fleet then stays out for what still falls short and flying could fix. Each
+drone with energy goes on exploring, its goals the view planner's, until one of:
+
+| Reason | Meaning |
+| --- | --- |
+| `little_left` | At most 2% of cells are short and reachable |
+| `little_gained` | Under 20 cells a drone-minute brought to the requirement over 20 s |
+| `time_up` | 120 s |
+| `fleet_homeward` | Every drone is going home |
+
+Both ends are decisions in the journal, with the counts. A drone at its reserve
+goes home as ever. Measured on the seven tuning seeds at each site:
+
+| | Without | With |
+| --- | --- | --- |
+| Cells meeting the requirement, West Pleasant View | 0.903–0.917 | 0.932–0.950 |
+| Montague City | 0.904–0.915 | 0.948–0.973 |
+| Ground RMSE, Montague City | 0.157–0.174 m | 0.151–0.166 m |
+| Mission complete | 372–455 s | 486–542 s |
+
+Every run used its 120 s. On Montague City that is half to two thirds of the
+cells left short.
+
+It costs time: with both drones 180 s without GNSS, 13 of 14 runs are still out
+at 600 s. All 14 complete by 706 s with every gate passed. The drones do not know
+how long the run is.
+
+`end_when_all_home` (on in `field_v3`) ends a scan whose every drone is homeward
+for good (a lost sensor, its reserve). The mission used to scan on with nothing
+to scan. It closes the points no drone can reach, completes, and its coverage
+stays short of its gate in the replay, so a score on the map still fails it.
 
 ## In the viewer and the scores
 
