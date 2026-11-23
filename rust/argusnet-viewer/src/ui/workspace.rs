@@ -448,16 +448,13 @@ mod tests {
         assert!(caveat.contains("clipped, not observed-free"));
     }
 
+    /// Operate reads the run, Review the client package's report (S1.2) and Plan
+    /// the backend's plan: each rail says what it has none of.
     #[test]
-    fn plan_says_what_it_waits_for() {
-        assert!(Workspace::Operate.unavailable_until().is_none());
-        // Review reads the client package's report (S1.2).
-        assert!(Workspace::Review.unavailable_until().is_none());
-        let why = Workspace::Plan.unavailable_until().expect("not built yet");
-        assert!(
-            why.contains("unavailable until") && why.contains("S1"),
-            "{why}"
-        );
+    fn every_workspace_has_a_source() {
+        for workspace in [Workspace::Operate, Workspace::Plan, Workspace::Review] {
+            assert_eq!(workspace.unavailable_until(), None);
+        }
     }
 
     /// One Escape, one transient mode: the event inspector closes and the

@@ -2,6 +2,9 @@
 
 ## Unreleased — Rust runtime, scheduled lanes and world realism
 
+- Mission plan: `argusnet-rs plan` checks a mission's declared sensors, batteries and
+  limits before it is flown, and the viewer's Plan workspace shows it (`--plan`;
+  `docs/migration/MISSION_PLAN.md`).
 - Inspection evidence (F7, first slice): `--inspection-evidence` asks for views of
   each point from all round it and goes back for those missing, within bounds
   (`docs/migration/INSPECTION_EVIDENCE.md`).

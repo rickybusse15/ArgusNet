@@ -10,7 +10,7 @@
   acknowledged Run/Pause/Step/Speed/Reset controls and seek-and-branch. Scene
   building is Rust too. The shell, inspectors, projections, layer presets,
   quality tiers and the Review workspace (reading a client package's assurance
-  report) exist; Plan remains unavailable pending its backend contracts.
+  report) exist; Plan shows a backend mission plan, read only; writing one waits for the S1 contracts.
 - Opt-in phased lanes support mission, mapping and fusion rates. Bearing sensors
   can capture at separate rates on tick boundaries; timed delivery supports
   delay/jitter and fixed-lag fusion. This is partial P4.10, not the full target.

@@ -222,10 +222,9 @@ impl Workspace {
     pub fn unavailable_until(self) -> Option<&'static str> {
         match self {
             Workspace::Operate => None,
-            Workspace::Plan => Some(
-                "Plan is unavailable until the canonical site, mission and trajectory \
-                 contracts exist (S1).",
-            ),
+            // Plan reads a mission plan the backend wrote; writing one here
+            // waits for the canonical contracts (S1), and the rail says so.
+            Workspace::Plan => None,
             // Review reads the assurance report a client package carries (S1).
             Workspace::Review => None,
         }
@@ -360,6 +359,8 @@ pub struct ViewerUiState {
     /// the live badge) anchor to it, and the picker treats a pointer outside
     /// it as over the UI.
     pub canvas_rect: Option<[f32; 4]>,
+    /// The mission plan the Plan workspace shows, as the backend wrote it.
+    pub plan: crate::ui::plan::PlanState,
     /// The primary workspace (§4.1). Independent of the projection and the
     /// layer preset: three distinct controls, none touching the selection.
     pub workspace: Workspace,
@@ -416,6 +417,7 @@ impl ViewerUiState {
 impl Default for ViewerUiState {
     fn default() -> Self {
         Self {
+            plan: crate::ui::plan::given_plan(),
             mode: ViewerMode::Mission,
             // A secondary destination (VIEWER_UI §4.1): closed until asked
             // for, so the canvas stays the dominant region.

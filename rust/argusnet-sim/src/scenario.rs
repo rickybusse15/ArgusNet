@@ -3240,6 +3240,67 @@ impl AssembledRun {
         Ok(self.replay.finish())
     }
 
+    /// The mission as declared, before any of it is flown. `None` for a run with
+    /// no mission.
+    pub fn mission_plan(
+        &self,
+        bundle: &ScenarioBundle,
+        run_profile: Option<String>,
+    ) -> Option<crate::plan_report::MissionPlan> {
+        let driver = self
+            .sim
+            .stage::<MissionDriverStage>(Stage::EvaluateMissionTransitions)?;
+        let battery = self.battery();
+        let config = self
+            .mapping()
+            .and_then(|mapping| mapping.exploration_config());
+        let bounds = self.map_bounds_m;
+        Some(crate::plan_report::build(crate::plan_report::PlanInput {
+            scenario_name: &bundle.scenario_name,
+            seed: bundle.seed,
+            run_profile,
+            duration_s: bundle.steps as f64 * bundle.dt_s,
+            bounds_m: [
+                bounds.x_min_m,
+                bounds.y_min_m,
+                bounds.x_max_m,
+                bounds.y_max_m,
+            ],
+            battery: &battery.model(),
+            drones: driver
+                .homes()
+                .iter()
+                .map(|(id, home)| {
+                    let energy = battery
+                        .remaining_wh(id)
+                        .unwrap_or(battery.model().capacity_wh);
+                    (id.clone(), *home, energy)
+                })
+                .collect(),
+            points: driver
+                .pois()
+                .iter()
+                .map(|poi| {
+                    (
+                        poi.poi_id.clone(),
+                        poi.position,
+                        poi.required_dwell_s,
+                        poi.priority,
+                    )
+                })
+                .collect(),
+            redirect_speed_mps: driver.config().redirect_speed_mps,
+            home_radius_m: driver.egress_arrival_radius_m(),
+            requirement: config.and_then(|config| config.quality.clone()),
+            gate_fraction: driver.scan_coverage_threshold(),
+            pass: self.predicted_pass.clone(),
+            finest_image_gsd_m: self
+                .mapping()
+                .and_then(|mapping| mapping.belief_grid())
+                .and_then(|grid| grid.finest_image_gsd_m()),
+        }))
+    }
+
     /// The map as a site's memory keeps it (F6). `None` without a quality
     /// requirement: without one the map claims nothing of what it knows.
     pub fn site_cells(

@@ -34,6 +34,7 @@ pub mod observation_follow;
 pub mod observe;
 pub mod overrides;
 pub mod particles;
+pub mod plan_report;
 pub mod pod;
 pub mod pursuit;
 pub mod range_scan;
