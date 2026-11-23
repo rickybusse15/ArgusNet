@@ -1,5 +1,9 @@
 # field_v2 qualification: West Pleasant View (2026-11-22)
 
+**Superseded** by the [two-site record](field-v2-qualification-2026-11-23.md):
+`field_v2` was changed for what a second site showed, so this is evidence for a
+build that no longer exists.
+
 **Qualified**: 15 of 15 runs passed every gate.
 
 

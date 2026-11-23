@@ -26,12 +26,12 @@
   the default run is still the prior-map one.
 - The Rust world accepts real buildings, DEM terrain and OSM features (land cover,
   trees and power lines) through one import pipeline, with West Pleasant View as
-  the canonical real site (R5.3).
+  the canonical real site (R5.3) and Montague City as the second.
 - Client packages carry the twelve record kinds (S1), energy contingencies and
   flown-energy accounting (F5), drift and mapping-outage faults (F2) and
   mission decision explanations (F3).
 - Remaining gates include complete independent scheduling and pending-job restore,
-  cross-platform determinism, a second real site, and separate hardware
+  cross-platform determinism, mapping from estimated position, and separate hardware
   qualification. Python still ships as the reference simulation and offline
   tooling.
 

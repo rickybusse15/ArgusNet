@@ -45,12 +45,53 @@ what is left and why.
   not the rig's 0.05 m. The map is overconfident despite that, because returns
   scatter over a sloping cell.
 
+## Plane heights (2026-11-23, what a second site showed)
+
+On Montague City, 55 m of relief with river banks, the same report read 1.64 to
+1.73 times the claim, with 85% of cells within two sigma. A cell's height was
+the mean of its accepted returns, and those fall 0.8 m from its centre at the
+median: on a slope that alone is the error, and the mean's sigma says nothing
+of it.
+
+With `--plane-heights` (on in `field_v2`) a cell keeps where its accepted
+returns fell, and:
+
+- **Its height is a plane's at its centre.** `plane_fit` in
+  `argusnet_mapping::quality`; the published ground uses it too. No plane is
+  fitted to fewer than four returns, to a line of them, or where it would say
+  less of the centre than one return there; the mean stands in those.
+- **Its claim is that plane's.** The scatter about the plane over what the fit
+  leaves at the centre, and the ground that is no plane: what the returns
+  scatter beyond their own noise, times 1.25 (180/144, the squared error of a
+  plane at the centre of evenly sampled constant curvature over the variance
+  it leaves). No count of returns reduces that part.
+- **A cell with no plane claims its spread whole**, or the relief its
+  neighbours show if that is more: one return has no spread.
+- **A return's noise is the rig's own LiDAR's** (0.05 m), not the legacy
+  scanner's 0.3 m, which the old claim needed to cover the slope.
+
+Eight tuning seeds each, on the build that was campaigned:
+
+| | Montague City, before | after | West Pleasant View, before | after |
+| --- | --- | --- | --- | --- |
+| Error over claim | 1.64–1.73 (3 seeds) | 1.00–1.07 | 1.19–1.20 (2 seeds) | 0.81–0.86 |
+| Within 2 sigma | 85% | 94–95% | 92% | 97–98% |
+| Ground RMSE, m | 0.19–0.21 | 0.16–0.18 | 0.10–0.11 | 0.092–0.096 |
+
+On the flatter site the map now claims somewhat more error than it has. The
+constants are the geometry's and the sensor's: none was set from these numbers.
+
 ## What it does not do
 
 - Nothing replans on it: it is written when the run ends.
 - `predicted` is flat ground, nadir, one pass. It is not a coverage plan.
-- A cell's error is its mean height less the true ground at its centre, so it
-  includes where in the cell the returns fell.
+- A cell's error is its height less the true ground at its centre. Without
+  plane heights that includes where in the cell the returns fell.
+- Rough ground is called `sparse` when its claim exceeds the requirement, though
+  flying more does not smooth it: fewer than 0.3% of Montague City's cells
+  scatter that much.
+- The true platform pose still places every return: no part of the claim is a
+  position error, and none of the measured error is.
 
 ## In the viewer and the scores
 

@@ -195,6 +195,30 @@ search lanes out of corridors keeps explorers off ground under the line that
 they used to map. W5 maps more, as prior goals send drones across the line on
 purpose. Two seeds are too few to say which holds in general.
 
+## Separation, and wires far below (2026-11-23)
+
+Montague City, with 14 lines where West Pleasant View has one, showed two
+things on `field_v2`.
+
+- **Separation sent a drone into a wire.** Leaving a POI 19 m from a line, with
+  a peer 14 m above it, a drone was asked down from the 62 m its governor held
+  to 53 m: 8.2 m from a conductor against 10 m. The flown-in separation
+  (`vertical_separation` in `deconflict.rs`) ran after the governor and knew no
+  wires. It now takes a yielder no further than the wires believed ahead allow,
+  looking as far as the governor does, and the peer makes up the rest the other
+  way; turning the yielder back would take it through the peer's height. Any
+  run with mission flights and wire planning gets it, `field_v1` included,
+  whose 15 record seeds replay byte for byte as before.
+- **A strip between two lines was never worth its crossing.** A planned leg
+  paid 300 m for each fitted conductor it would cross and more to run along
+  one, and steering turned it out of every corridor, though the wires stood
+  30 m over ground the flight kept 124 m above. The strip stayed unseen, up to
+  2% of the map: enough, on one seed of fifteen, to hold the scan open as an
+  enclosed hole until 499 s, and the mission ran out of time. With
+  `over_wires` in the view planning profile (on in `field_v2`), a wire the
+  cruise height clears is open ground to the planner. The governor still has
+  the last word on height. The default planner and `field_v1` are unchanged.
+
 ## Known limits
 
 - **Mission flights along a line.** The governor moves only height. Mission

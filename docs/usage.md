@@ -337,7 +337,7 @@ cargo run -p argusnet-viewer -- --run runs/site/scenario.json --profile field_v1
 worth most per watt-hour) and imaging: the pod's cameras are modelled and every
 cell is asked for an image of 4 cm a pixel or finer. It also writes the map
 report and brings a drone home when it loses a sensor. See its
-[qualification](performance/field-v2-qualification-2026-11-22.md).
+[qualification](performance/field-v2-qualification-2026-11-23.md).
 
 A config run this way is built for platforms that do not know the world
 (`blind_setup`). See [FIELD_PROFILE.md](migration/FIELD_PROFILE.md) for what
@@ -347,6 +347,15 @@ site against the profile's frozen thresholds:
 ```bash
 python scripts/real_site_inspection.py --output runs/real-site --profile field_v1
 python scripts/qualify_field_profile.py --output runs/field-v1
+```
+
+`--plane-heights` takes a cell's height from a plane through its accepted
+returns, at the cell's centre, and claims what that plane leaves unsaid. It is
+on in `field_v2`. A site is scored with `--site`:
+
+```bash
+python scripts/qualify_field_profile.py --output runs/montague --profile field_v2 \
+  --site tests/fixtures/real/montague_city
 ```
 
 `--map-report FILE` writes what the map was asked for against what it achieved

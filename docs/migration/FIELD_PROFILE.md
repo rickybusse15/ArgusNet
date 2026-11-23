@@ -295,8 +295,9 @@ this.
 ## Field profile v2
 
 `--profile field_v2` is `field_v1` plus what later slices add. **Qualified on
-West Pleasant View: 15 of 15 unseen seeds pass every gate**
-([record](../performance/field-v2-qualification-2026-11-22.md)), against
+two real sites: 15 of 15 unseen seeds pass every gate on West Pleasant View and
+15 of 15 on Montague City, Massachusetts**
+([record](../performance/field-v2-qualification-2026-11-23.md)), against
 `docs/contracts/field_v2.thresholds.json`: `field_v1`'s gates unchanged, and
 three on the map's own claims and its images. The tables below are tuning seeds.
 
@@ -351,8 +352,17 @@ was asked for against what it achieved.
 A navigation camera out for 10 s or a mapping payload out for 60 s sends its
 drone home for good. An unfaulted run is unchanged by it.
 
-`field_v1` itself is unchanged: its West Pleasant View replay is
-byte-identical to the build before, and the canonical replays are 14 of 14.
+**What a second site changed (2026-11-23).** On Montague City the profile as
+qualified passed none of three tuning seeds. Plane heights ([MAP_REPORT.md](MAP_REPORT.md))
+make the map's claim hold on slopes; separation keeps wires, and the planner
+flies over wires its cruise height clears
+([WIRE_CORRIDORS.md](WIRE_CORRIDORS.md)). The tables above are the build before
+these; on the one campaigned, the eight tuning seeds finish in 359 to 453 s on
+West Pleasant View (median 383 s) and 348 to 417 s on Montague City.
+
+`field_v1` itself is unchanged: its 15 record seeds on West Pleasant View replay
+byte for byte as on the build before (the separation fix applies to it, and none
+of them meets it), and the canonical replays are 14 of 14.
 
 ## Tests
 
@@ -364,7 +374,8 @@ deconfliction stage's unit tests, `tests/test_field_qualification.py` (18).
 
 ## What it does not claim
 
-- One real site. A second needs OSM and elevation sources fetched.
+- `field_v1`: one real site. It has not been run on Montague City.
+- `field_v2`: two real sites, one machine.
 - The rig, LiDAR and camera models are assumed, not calibrated.
 - The map requirement's vertical sigma is still judged from the returns'
   own spread and a declared bias; nothing yet compares predicted against
